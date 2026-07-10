@@ -1,0 +1,6 @@
+.env
+parsers/cache/
+parsers/data/
+__pycache__/
+*.pyc
+.DS_Store
