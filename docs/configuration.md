@@ -10,7 +10,6 @@
 |---|---|---|
 | `NEO4J_PASSWORD` | — | пароль Neo4j (логин фиксирован — `neo4j`) |
 | `PARSERS_PORT` | `8567` | порт FastAPI на хосте |
-| `CACHE_MAX_MB` | `10240` | лимит кэша (10 ГБ), старое удаляется автоматически |
 | `API_MIN_INTERVAL_SEC` | `0.5` | минимальный интервал между запросами (2/сек, запас от 3) |
 | `API_RATE_WINDOW_SEC` | `60` | окно скользящего лимита (сек) |
 | `API_RATE_WINDOW_MAX` | `55` | макс. запросов за окно (запас от 60) |
@@ -28,7 +27,6 @@
 |---|---|---|---|
 | `batch_size` | `BATCH_SIZE` | `50` | размер порции для запроса к БД (не лимитирует API) |
 | `cycle_interval_sec` | `CYCLE_INTERVAL_SEC` | `86400` | пауза между циклами (1 раз в день) |
-| `cache_max_mb` | `CACHE_MAX_MB` | `10240` | лимит кэша (10 ГБ) |
 | `max_attempts` | `MAX_ATTEMPTS` | `3` | retry до пометки `failed` |
 | `retry_backoff_minutes` | `RETRY_BACKOFF_MINUTES` | `5` | пауза перед повтором после ошибки |
 | `refresh_current_days` | — | `1` | как часто обновлять текущий/следующий сезон |
@@ -40,26 +38,67 @@
 
 | Метод | Путь | Смысл |
 |---|---|---|
-| GET | `/status` | метрики очереди (всего, обработано, due, failed) |
-| GET | `/failed` | тайтлы со статусом `failed` |
-| POST | `/failed/retry` | сбросить все failed-тайтлы в очередь на переобработку |
-| POST | `/refresh/{mal_id}` | принудительно обновить один тайтл |
-| GET | `/cache/stats` | размер кэша, количество файлов, путь |
-| POST | `/cache/clear` | очистить весь кэш |
-| GET | `/config` | текущие лимиты, интервалы, размеры |
+| GET | `/status` | статистика (total, parsed, stubs, airing, seasons) |
+| GET | `/stubs` | неполные узлы — Anime с title IS NULL |
+| POST | `/refresh/{mal_id}` | принудительно обновить один тайтл (прямой вызов) |
+| POST | `/trigger-cycle` | запустить цикл scheduler прямо сейчас (discover + due-очередь) |
+| PUT | `/schedule` | изменить интервал автоматического цикла (`cycle_interval_sec`) |
+| GET | `/config` | текущие лимиты, интервалы |
 | GET | `/health` | проверка живости |
+
+### POST /trigger-cycle
+
+Запускает цикл scheduler немедленно, не дожидаясь таймера. Выполняет
+discover (текущий/следующий/прошлый сезон) и обрабатывает все due-тайтлы.
+Влияет на все три актуальных сезона, включая прошлый (который обычно
+обновляется раз в неделю). Если цикл уже выполняется — возвращает 409.
+
+```bash
+curl -X POST http://localhost:8567/trigger-cycle
+```
+
+### PUT /schedule
+
+Меняет `cycle_interval_sec` — как часто scheduler запускается автоматически.
+Минимум 60 секунд. Изменение применяется немедленно и действует до
+перезапуска контейнера (для постоянного изменения — отредактируйте `config.yaml`).
+
+```bash
+curl -X PUT http://localhost:8567/schedule \
+  -H "Content-Type: application/json" \
+  -d '{"cycle_interval_sec": 3600}'
+```
+
+## Настройки Neo4j (docker-compose.yml)
+
+| Переменная | Значение | Смысл |
+|---|---|---|
+| `NEO4J_server_memory_heap_initial__size` | `1G` | Начальный размер heap (транзакции, запросы) |
+| `NEO4J_server_memory_heap_max__size` | `4G` | Максимум heap (растёт при нагрузке) |
+| `NEO4J_server_memory_pagecache_size` | `2G` | Кэш данных на диске (весь 905MB граф помещается с запасом) |
+
+Изменения применяются при `docker compose restart neo4j` (или полном
+`docker compose up -d`). Не требуют пересборки образа.
+
+### Индексы и констрейнты
+
+Созданы через Cypher (см. [data-model.md](data-model.md)). Констрейнты
+хранятся в самой БД Neo4j — не теряются при перезапуске. Для проверки:
+
+```bash
+docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+  "SHOW CONSTRAINTS YIELD name, type, labelsOrTypes, properties
+   RETURN name, type, labelsOrTypes, properties ORDER BY labelsOrTypes;"
+```
 
 ## Кэш
 
-Кэш HTML-страниц хранится в `parsers/cache/` (bind mount в `/app/cache`) —
-файлы `.html`, по одному на каждый URL. SQLite — в `parsers/data/`
-(bind mount в `/app/data`). Оба каталога видны на хост-машине.
+Файловый кэш HTML-страниц удалён в v7 (бессмертный кэш без TTL скрывал
+обновления MAL). Все HTTP-запросы идут напрямую на myanimelist.net с
+ретраями и лимитами (0.5s интервал, 55 req/мин). Резюмируемость
+обеспечивается SQLite (status='ok', next_check_at).
 
-Кэш работает так: при запросе fetcher сначала проверяет `.html` файл на диске.
-Если есть — отдаёт из кэша (без HTTP-запроса). Если нет — делает запрос,
-сохраняет ответ в кэш. При добавлении новых полей в `mal_scraper.py` можно
-повторно извлечь данные из кэша без обращения к сайту
-(`fetcher.cached_get_html(url, force=False)`).
-
-На один тайтл — два HTTP-запроса: основная страница + страница characters/staff.
-Список сезона — один запрос. Итого ~27 тайтлов/мин при лимите 55 req/мин.
+Папка parsers/cache/ (5.9 GB) — удалить вручную:
+```bash
+chmod -R u+w parsers/cache && rm -rf parsers/cache
+```

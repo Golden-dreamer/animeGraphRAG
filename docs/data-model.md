@@ -1,37 +1,6 @@
 # Модель данных
 
-## SQLite (`data/state.db`) — служебное состояние, НЕ доменные данные
-
-### `anime_progress`
-
-| Поле | Тип | Смысл |
-|---|---|---|
-| `mal_id` | INTEGER PK | ID тайтла на MyAnimeList |
-| `year`, `season` | INTEGER, TEXT | сезон выхода (используется для приоритета и правил обновления) |
-| `mal_status` | TEXT | статус с сайта: `Currently Airing` / `Finished Airing` / `Not yet aired` |
-| `priority` | INTEGER | `1` = принудительно поставлен в начало очереди (`POST /refresh`), `0` = обычный |
-| `last_parsed_at` | TEXT (ISO) | когда последний раз успешно обработан |
-| `next_check_at` | TEXT (ISO) | когда обрабатывать следующий раз (см. `rules.py`) |
-| `attempts` | INTEGER | счётчик подряд идущих ошибок, сбрасывается при успехе |
-| `status` | TEXT | `pending` (ещё не обработан или ждёт retry) / `ok` (успешно спарсен хотя бы раз) / `failed` (исчерпал попытки, нужно вмешательство) |
-| `last_error` | TEXT | текст последней ошибки (для диагностики через `GET /failed`) |
-
-`next_check_at = '9999-01-01T00:00:00+00:00'` — специальное значение
-"никогда не обновлять автоматически" (используется и для архивных тайтлов
-старше `refresh_recent_years`, и для `status='failed'`).
-
-### `seasons_bootstrapped`
-
-| Поле | Тип | Смысл |
-|---|---|---|
-| `year`, `season` | INTEGER, TEXT | PK |
-| `completed_at` | TEXT (ISO) | когда `bootstrap.py` полностью закрыл этот сезон |
-
-Используется только `bootstrap.py`, чтобы не пересканировать список сезона
-повторно при рестарте (хотя список и так закэширован — эта таблица экономит
-даже чтение кэша и итерацию по уже обработанным тайтлам).
-
-## Neo4j — доменный граф
+## Neo4j — единственная БД (с v8)
 
 ### Узлы
 
@@ -46,6 +15,7 @@
 | `:ExternalLink` | `url`, `name` | Available At, Resources (включая ссылку на MAL) |
 | `:StreamingPlatform` | `name` | Streaming Platforms |
 | `:Manga` | `mal_id`, `title` | Related Entries (тип manga) |
+| `:Season` | `year`, `season`, `bootstrapped` | Внутренний: отметка о закрытии сезона в bootstrap |
 
 ### Связи
 
@@ -67,6 +37,49 @@
 
 Все записи идут через `MERGE`, повторный `loader.upsert_anime()` с тем же
 `mal_id` не создаёт дублей, а обновляет свойства узла.
+
+### Индексы и констрейнты
+
+Neo4j не создаёт индексы по свойствам автоматически — только дефолтные
+LOOKUP-индексы по внутреннему ID узла (который нестабилен и не подходит
+для MERGE). Без явных индексов каждый `MERGE (a:Anime {mal_id: $mal_id})`
+делает полный скан всех узлов данной метки — O(n).
+
+Созданы констрейнты (уникальность + индекс) для всех ключей, по которым
+идёт `MERGE` в `loader.py`:
+
+| Метка | Свойство | Тип | Назначение |
+|---|---|---|---|
+| `:Anime` | `mal_id` | UNIQUE CONSTRAINT | Первичный ключ тайтла |
+| `:Person` | `mal_id` | UNIQUE CONSTRAINT | Первичный ключ человека (staff/VA) |
+| `:Character` | `mal_id` | UNIQUE CONSTRAINT | Первичный ключ персонажа |
+| `:Manga` | `mal_id` | UNIQUE CONSTRAINT | Первичный ключ манги (related) |
+| `:Genre` | `name` | UNIQUE CONSTRAINT | Уникальность жанра/темы/демографии |
+| `:Studio` | `name` | UNIQUE CONSTRAINT | Уникальность студии |
+| `:Producer` | `name` | UNIQUE CONSTRAINT | Уникальность продюсера/лицензиара |
+| `:ExternalLink` | `url` | INDEX (не unique) | Быстрый lookup по URL |
+
+Констрейнт = индекс + гарантия уникальности. Если попытаться создать
+два Anime с одинаковым `mal_id` — Neo4j выбросит ошибку (что и нужно,
+`MERGE` сам предотвращает дубли, но констрейнт — страховка).
+
+Cypher-команды для проверки:
+```cypher
+SHOW CONSTRAINTS YIELD name, type, labelsOrTypes, properties
+RETURN name, type, labelsOrTypes, properties ORDER BY labelsOrTypes;
+
+SHOW INDEXES YIELD name, type, state, labelsOrTypes, properties
+RETURN name, type, state, labelsOrTypes, properties ORDER BY labelsOrTypes;
+```
+
+### Добавление данных с других сайтов
+
+Если в будущем появится инфа с AniList, Kitsu и т.д.:
+- `mal_id` остаётся главным ключом (MAL — первоисточник).
+- ID с других сайтов — дополнительные свойства: `a.anilist_id = 12345`.
+- При необходимости — `CREATE INDEX FOR (a:Anime) ON (a.anilist_id)`.
+- Если появится аниме, которого нет на MAL — суррогатный ключ
+  `uid = "mal:5249"` или `"anilist:12345"` с констрейнтом на `uid`.
 
 ### Отображение в Neo4j Browser
 

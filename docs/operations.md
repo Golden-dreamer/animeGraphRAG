@@ -47,7 +47,6 @@ docker stop bootstrap && docker rm bootstrap
 ```
 
 Продолжить с того же места позже — запустить ту же команду заново. Он не будет:
-- повторно скачивать уже закэшированные страницы сезонов и аниме;
 - повторно обрабатывать тайтлы, у которых `last_parsed_at` уже проставлен;
 - пересканировать сезоны, помеченные в `seasons_bootstrapped`.
 
@@ -61,50 +60,47 @@ curl http://localhost:8567/status
 
 ```json
 {
-  "total_titles_known": 455,           // всего тайтлов в очереди
-  "titles_parsed_at_least_once": 419, // реально долетело до Neo4j
-  "due_right_now": 36,                // ждут обработки в этот момент
-  "forced_priority_pending": 0,       // сколько стоит в "быстрой полосе"
-  "seasons_bootstrapped": 180,        // сколько сезонов архива закрыто
-  "permanently_failed": 0             // исчерпали retry, нужно смотреть руками
+  "total_anime": 20392,           // всего узлов :Anime в графе
+  "parsed": 20243,                // обработаны (title IS NOT NULL)
+  "unprocessed_stubs": 149,       // не обработаны (title IS NULL) — scheduler попробует снова
+  "currently_airing": 257,        // mal_status = 'Currently Airing'
+  "not_yet_aired": 57,            // mal_status = 'Not yet aired'
+  "seasons_bootstrapped": 437     // закрытых сезонов (узлы :Season)
 }
 ```
 
-### Failed-тайтлы
+### Неполные узлы (stubs)
 
-Если `permanently_failed > 0`:
-
-```bash
-curl http://localhost:8567/failed
-```
-
-Покажет `mal_id`, текст последней ошибки и сколько попыток было. Дать всем
-второй шанс одним запросом:
+Если `unprocessed_stubs > 0` — есть тайтлы, которые не были обработаны
+(ошибка сети, парсинга, сайт был недоступен). Scheduler попробует снова
+в следующем цикле. Посмотреть конкретные тайтлы:
 
 ```bash
-curl -X POST http://localhost:8567/failed/retry
+curl http://localhost:8567/stubs
 ```
 
-Или по одному:
+Принудительно обновить один тайтл:
 
 ```bash
 curl -X POST http://localhost:8567/refresh/{mal_id}
 ```
 
-Сброшенные тайтлы обрабатываются в начале следующего цикла scheduler. Чтобы
-обработать сразу — перезапустите контейнер (`docker compose restart parsers`),
-scheduler запустит новый цикл при старте.
+Или запустить полный цикл scheduler:
+
+```bash
+curl -X POST http://localhost:8567/trigger-cycle
+```
 
 ## Что происходит при ошибке автоматически (без вашего участия)
 
-1. Ошибка при обработке тайтла (сетевая, парсинг, что угодно) → тайтл НЕ
-   теряется, он уже был зарегистрирован в `anime_progress` на этапе discover.
-2. `next_check_at` откладывается на `retry_backoff_minutes` (по умолчанию 5
-   минут) — тайтл автоматически попробуется снова.
-3. После `max_attempts` (по умолчанию 3) неудач подряд — статус `failed`,
-   тайтл выходит из автоматической очереди (не блокирует остальные), но
-   виден через `GET /failed`.
-4. Успешная обработка в любой момент сбрасывает счётчик попыток на 0.
+1. Ошибка при обработке тайтла (сетевая, парсинг, что угодно) → логируется,
+   тайтл остаётся stub (title IS NULL).
+2. Scheduler при следующем цикле снова берёт все Currently Airing +
+   Not yet aired + stub'ы → пытается снова.
+3. Для архивных тайтлов: /refresh/{mal_id} для принудительного обновления,
+   или перезапуск bootstrap.
+4. Никаких retry-счётчиков, статусов failed, или next_check_at —
+   просто "нет title → попробовать снова".
 
 ## Принудительное обновление конкретного тайтла
 
@@ -112,8 +108,9 @@ scheduler запустит новый цикл при старте.
 curl -X POST http://localhost:8567/refresh/{mal_id}
 ```
 
-Полезно, если: изменился рейтинг у архивного тайтла; тайтл попал в `failed`
-и вы хотите повторить попытку; данные явно устарели.
+Обновляет тайтл прямо сейчас (прямой вызов process_one), без очереди.
+Полезно: изменился рейтинг у архивного тайтла; тайтл остался stub;
+данные явно устарели.
 
 ## Просмотр графа
 
@@ -140,3 +137,53 @@ SET a.title = a.title_original
 ```bash
 docker compose restart parsers
 ```
+
+## Управление циклами scheduler через API
+
+### Запустить цикл прямо сейчас
+
+```bash
+curl -X POST http://localhost:8567/trigger-cycle
+```
+
+Выполняет discover (текущий/следующий/прошлый сезон) и обрабатывает все
+due-тайтлы. Влияет на все три актуальных сезона, включая прошлый
+(который обычно обновляется раз в неделю). Если цикл уже выполняется —
+возвращает 409 Conflict.
+
+### Изменить интервал автоматического цикла
+
+```bash
+curl -X PUT http://localhost:8567/schedule \
+  -H "Content-Type: application/json" \
+  -d '{"cycle_interval_sec": 3600}'
+```
+
+Минимум 60 секунд. Изменение применяется немедленно и действует до
+перезапуска контейнера. Для постоянного изменения — отредактируйте
+`config.yaml` (параметр `cycle_interval_sec`).
+
+## Дополнение staff (после исправления fetcher)
+
+Если база наполнялась до v5, staff у большинства аниме неполный.
+Дополнить одним скриптом:
+
+```bash
+docker compose run --rm parsers python update_staff.py
+```
+
+Проходит все аниме с <=4 staff в Neo4j, фетчит /characters с правильным
+URL и обновляет связи. Резюмируемый, можно ограничить: `--limit 100`.
+
+## Дополнение пропущенных тайтлов
+
+Сверить сезонные страницы с БД и добавить недостающие:
+
+```bash
+docker compose run --rm parsers python check_missing.py          # актуальные
+docker compose run --rm parsers python check_missing.py --all    # все сезоны
+docker compose run --rm parsers python check_missing.py --season 2006 summer
+```
+
+Недостающие тайтлы регистрируются в очереди, scheduler обработает их
+при следующем цикле (или сразу через `POST /trigger-cycle`).

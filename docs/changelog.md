@@ -3,6 +3,110 @@
 Формат: дата — что изменилось и почему. Ведётся вручную, по мере значимых
 архитектурных решений (не каждый мелкий коммит).
 
+## 2026-07-11 (v8) — удаление SQLite, одна БД (Neo4j)
+
+**Проблема:** SQLite (state.db) хранил очередь задач, retry-логику и
+метаданные — дублировал данные, уже есть в Neo4j (mal_status, year,
+season). Бессмертный кэш скрывал обновления. Retry-логика усложняла
+код без реальной пользы.
+
+**Решения:**
+- `db.py`, `rules.py` — удалены.
+- `graph_state.py` — новый модуль: очередь/state в Neo4j.
+  - "Не обработан" = `:Anime` с `title IS NULL` (stub).
+  - `select_due_anime` — `mal_status IN ['Currently Airing', 'Not yet aired']`.
+  - `select_due_for_season` — `title IS NULL` для конкретного сезона.
+  - `:Season {year, season, bootstrapped: true}` — заменяет seasons_bootstrapped.
+- `processing.py` — убрана retry-логика, mark_failed, mark_parsed.
+  Ошибка → лог, тайтл остаётся stub (title IS NULL), scheduler попробует снова.
+- `scheduler_logic.py` — select due из Neo4j через graph_state.
+- `discover.py` — MERGE stubs в Neo4j через graph_state.upsert_anime_stub.
+- `bootstrap.py` — работа через Neo4j (graph_state).
+- `check_missing.py` — сверка MAL ↔ Neo4j напрямую.
+- `update_staff.py` — убрана зависимость от db.
+- `app.py`:
+  - `/refresh/{mal_id}` — вызывает process_one напрямую (без очереди).
+  - `/status` — статистика из Neo4j (total, parsed, stubs, airing, seasons).
+  - `/stubs` — новый endpoint: неполные узлы (title IS NULL).
+  - `/failed`, `/failed/retry` — удалены.
+- `docker-compose.yml` — убран volume `./parsers/data`.
+- `parsers/data/` — больше не нужна.
+- Индекс: `CREATE INDEX FOR (a:Anime) ON (a.mal_status)`.
+
+**Архитектура:** одна БД (Neo4j), одна точка истины.
+  - Домен: :Anime, :Person, :Character, :Genre, :Studio, :Producer, :Manga, :Season.
+  - Состояние: title IS NULL = не обработан, :Season.bootstrapped = сезон закрыт.
+  - Scheduler: обновляет Currently Airing + Not yet aired каждый цикл.
+
+## 2026-07-11 (v7) — удаление файлового кэша
+
+**Проблема:** файловый кэш HTML-страниц (5.9 GB, 45k файлов) не имел TTL —
+бессмертный кэш скрывал обновления MAL. Discover читал старые сезонные
+страницы и не видел новые тайтлы. SQLite (state.db) уже отслеживал
+обработанные тайтлы, делая кэш избыточным для резюмируемости.
+
+**Решения:**
+- `fetcher.py`: удалён cached_get_html, CACHE_DIR, get_cache_stats,
+  clear_cache, cleanup_cache_if_over_limit. Добавлен get_html (прямой HTTP).
+- `app.py`: удалены endpoints /cache/stats, /cache/clear, cache из /config.
+- `config.py`, `config.yaml`: удалён cache_max_mb.
+- `docker-compose.yml`: удалён CACHE_MAX_MB и volume ./parsers/cache.
+- `scheduler_logic.py`: удалён cleanup_cache_if_over_limit.
+- `update_staff.py`, `bootstrap.py`, `check_missing.py`: убраны
+  cache-зависимости и --force флаги.
+- `processing.py`: убран force параметр из process_one.
+- Папка parsers/cache/ (5.9 GB) — удалить вручную (см. operations.md).
+
+**Результат:** discover теперь каждый цикл идёт на MAL напрямую и видит
+актуальные данные. Резюмируемость сохранена через SQLite (status='ok',
+next_check_at в будущем).
+
+## 2026-07-11 (v6) — индексы и констрейнты Neo4j, настройка памяти
+
+**Проблема:** Neo4j работал без индексов и констрейнтов по свойствам —
+только дефолтные LOOKUP-индексы по внутреннему ID. Каждый `MERGE
+(a:Anime {mal_id: $mal_id})` делал полный скан всех узлов (O(n)).
+На 187k узлов и 520k связей — уже медленно; при миллионах пользователей
+с оценками — катастрофа. Память Neo4j — дефолт (~512MB heap), данных 905MB.
+
+**Решения:**
+- Созданы 7 uniqueness-констрейнтов (индекс + гарантия уникальности):
+  `Anime.mal_id`, `Person.mal_id`, `Character.mal_id`, `Manga.mal_id`,
+  `Genre.name`, `Studio.name`, `Producer.name`.
+- Создан 1 обычный индекс: `ExternalLink.url`.
+- `docker-compose.yml`: добавлены настройки памяти Neo4j:
+  `heap_initial=1G`, `heap_max=4G`, `pagecache=2G`.
+- Все MERGE в loader.py теперь идут через индекс — O(log n) вместо O(n).
+
+**Текущий размер БД:** 187,621 узлов, 520,449 связей, 905 MB на диске.
+
+## 2026-07-11 (v5) — исправление staff, управление scheduler, дополнение БД
+
+**Проблемы:**
+1. Staff парсился неполно: fetcher.py использовал короткий URL
+   `/anime/{id}/characters`, который MAL редиректит на основную страницу
+   аниме (без /characters), где staff ограничен 2-4 людьми. Полный URL
+   со slug (`/anime/{id}/{slug}/characters`) отдаёт отдельную страницу
+   с полным списком staff (до 100+ человек).
+2. Нет API для ручного запуска цикла scheduler или изменения интервала.
+3. Некоторые тайтлы пропущены при первичном наполнении (MAL дополняет
+   сезонные страницы со временем).
+
+**Решения:**
+- `mal_scraper.py`: добавлена `extract_slug_from_url(html)` — извлекает
+  slug из canonical/og:url URL основной страницы.
+- `fetcher.py`: `get_anime_full()` теперь строит полный URL
+  `/anime/{id}/{slug}/characters` вместо короткого.
+- `loader.py`: добавлена `upsert_staff_only(mal_id, staff)` — точечное
+  обновление staff без перезаписи остальных полей.
+- `update_staff.py`: новый скрипт для дополнения staff у уже обработанных
+  аниме (проходит все с <=4 staff, обновляет через правильный URL).
+- `check_missing.py`: новый скрипт для сверки сезонных страниц с SQLite
+  и добавления недостающих тайтлов в очередь.
+- `app.py`: добавлены эндпоинты:
+  - `POST /trigger-cycle` — запустить цикл scheduler прямо сейчас
+  - `PUT /schedule` — изменить cycle_interval_sec (интервал автоматического цикла)
+
 ## 2026-07-10 (v4) — переход на прямой HTML-парсинг MyAnimeList
 
 **Проблемы:**

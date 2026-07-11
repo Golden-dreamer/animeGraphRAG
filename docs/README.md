@@ -9,3 +9,5 @@
 Статус: **GraphRAG-парсер MyAnimeList**. Прямой HTML-скрапинг (без Jikan API),
 полная модель данных (аниме, персонажи, voice actors, staff, related entries,
 ресурсы, стриминг), работает локально через `docker compose up`.
+API: ручной запуск цикла (`/trigger-cycle`), управление интервалом (`/schedule`),
+скрипты дополнения staff (`update_staff.py`) и пропущенных тайтлов (`check_missing.py`).

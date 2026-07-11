@@ -74,6 +74,30 @@ def _extract_type_from_url(url: str) -> str | None:
     return None
 
 
+def extract_slug_from_url(html: str) -> str | None:
+    """Извлекает slug аниме из canonical/og:url URL основной страницы.
+
+    URL вида https://myanimelist.net/anime/5249/Mitsume_ga_Tooru
+    возвращает 'Mitsume_ga_Tooru'. Нужно для построения полного URL
+    страницы /characters — MAL требует полный URL со slug, иначе
+    редиректит на основную страницу (где staff неполный).
+    """
+    soup = BeautifulSoup(html, 'html.parser')
+    # Сначала canonical, потом og:url
+    link = soup.select_one('link[rel="canonical"]')
+    url = link.get('href') if link and link.get('href') else ''
+    if not url:
+        og = soup.select_one('meta[property="og:url"]')
+        url = og.get('content') if og and og.get('content') else ''
+    if not url:
+        return None
+    # URL: https://myanimelist.net/anime/5249/Mitsume_ga_Tooru
+    m = re.search(r'/anime/\d+/([^/?#]+)', url)
+    if m:
+        return m.group(1)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Парсер основной страницы аниме
 # ---------------------------------------------------------------------------

@@ -4,6 +4,10 @@ services:
     restart: unless-stopped
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      # --- память: heap для транзакций/запросов, pagecache для данных на диске ---
+      NEO4J_server_memory_heap_initial__size: 1G
+      NEO4J_server_memory_heap_max__size: 4G
+      NEO4J_server_memory_pagecache_size: 2G
     ports:
       - "7474:7474"   # веб-браузер Neo4j (http://<IP-машины>:7474)
       - "7687:7687"   # bolt-протокол (для loader.py и десктопного Neo4j Browser)
@@ -36,12 +40,8 @@ services:
       API_RETRY_MAX_DELAY: ${API_RETRY_MAX_DELAY:-30}
       API_HTTP_TIMEOUT: ${API_HTTP_TIMEOUT:-20}
       MAL_BASE_URL: ${MAL_BASE_URL:-https://myanimelist.net}
-      # --- кэш ---
-      CACHE_MAX_MB: ${CACHE_MAX_MB:-10240}
     volumes:
       - ./parsers:/app                    # код монтируется — правки конфига/кода без пересборки
-      - ./parsers/cache:/app/cache        # кэш API-ответов (видно на хосте)
-      - ./parsers/data:/app/data          # state.db (SQLite)
 
 volumes:
   neo4j_data:

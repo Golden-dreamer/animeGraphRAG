@@ -256,3 +256,18 @@ def close():
     if _driver is not None:
         _driver.close()
         _driver = None
+
+
+def upsert_staff_only(mal_id: int, staff: list[dict]):
+    """Обновляет только staff-связи для аниме (без перезаписи остальных полей).
+
+    Используется скриптом update_staff.py для дополнения неполного staff
+    без повторного парсинга всей страницы аниме. MERGE гарантирует
+    отсутствие дубликатов.
+    """
+    with get_driver().session() as session:
+        # MERGE узла Anime (на случай если его нет)
+        session.run("MERGE (a:Anime {mal_id: $mal_id})", mal_id=mal_id)
+
+        for person in staff:
+            session.execute_write(_link_staff, mal_id, person)

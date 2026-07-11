@@ -1,38 +1,55 @@
-import logging
+"""Один цикл scheduler: discover актуальных сезонов + обработка airing-тайтлов.
 
-import db
+Таймер в app.py срабатывает раз в cycle_interval_sec и вызывает run_cycle().
+Цикл:
+  1. discover_recent — регистрирует новые тайтлы текущего/следующего/прошлого сезона
+  2. Собирает ВСЕ актуальные тайтлы (Currently Airing + Not yet aired) одним запросом
+  3. Обрабатывает каждый (фетчит MAL → обновляет Neo4j)
+  4. Возвращает управление — app.py ждёт cycle_interval_sec до следующего цикла
+"""
+import logging
+from datetime import datetime, timedelta
+
+import graph_state
 import discover
-import fetcher
 from config import Config
 from processing import process_one
 
 log = logging.getLogger("scheduler")
 
-# Размер порции для одного запроса к БД. Scheduler обрабатывает ВСЕ due-тайтлы
-# за цикл, но достаёт их порциями чтобы не грузить миллион строк за раз.
-# Реальный лимит скорости — это Jikan API rate limiter в fetcher.py.
-_DB_BATCH = 100
+_PROGRESS_EVERY = 50
 
 
 def run_cycle(cfg: Config):
-    fetcher.cleanup_cache_if_over_limit(cfg.cache_max_mb)
-    discover.discover_recent(cfg)
+    log.info("Discover: проверка текущего/следующего/прошлого сезона...")
+    added = discover.discover_recent(cfg)
+    log.info("Discover завершён: зарегистрировано %d новых тайтлов", added)
 
-    total_processed = 0
-    total_failed = 0
-    while True:
-        mal_ids = db.select_due_anime(limit=_DB_BATCH)
-        if not mal_ids:
-            break
-        log.info("Цикл: к обработке %d тайтлов (всего за цикл: %d)",
-                 len(mal_ids), total_processed)
-        for mal_id in mal_ids:
-            try:
-                process_one(mal_id, cfg)
-                total_processed += 1
-            except Exception as e:
-                # process_one не должен бросать, но на всякий случай
-                log.error("mal_id=%s: непредвиденная ошибка: %s", mal_id, e)
-                total_failed += 1
+    # Собираем все актуальные тайтлы одним запросом — без while True,
+    # иначе обработанные тайтлы возвращаются снова (mal_status не меняется).
+    mal_ids = graph_state.select_due_anime()
+    total = len(mal_ids)
+    log.info("Цикл: %d актуальных тайтлов к обновлению", total)
 
-    log.info("Цикл завершён: обработано %d, ошибок %d", total_processed, total_failed)
+    if total == 0:
+        log.info("Цикл завершён: нет актуальных тайтлов")
+        return
+
+    processed = 0
+    failed = 0
+    for i, mal_id in enumerate(mal_ids, 1):
+        try:
+            process_one(mal_id, cfg)
+            processed += 1
+        except Exception as e:
+            # process_one сам ловит ошибки, но на всякий случай — safety net
+            log.error("mal_id=%s: непредвиденная ошибка: %s", mal_id, e)
+            failed += 1
+        if i % _PROGRESS_EVERY == 0:
+            log.info("Прогресс: %d/%d (%.0f%%)", i, total, i / total * 100)
+
+    log.info("Цикл завершён: обработано %d/%d, ошибок %d",
+             processed, total, failed)
+    log.info("Следующий цикл через %d сек (в %s)",
+             cfg.cycle_interval_sec,
+             (datetime.now() + timedelta(seconds=cfg.cycle_interval_sec)).strftime("%Y-%m-%d %H:%M:%S"))

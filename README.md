@@ -42,6 +42,32 @@ docker compose run --rm parsers python bootstrap.py
 
 Подробнее про диагностику ошибок и статус — в [`docs/operations.md`](docs/operations.md).
 
+## Дополнение staff (после исправления fetcher)
+
+Если база наполнялась до исправления URL /characters (v5), staff у большинства
+аниме неполный (2-4 человека вместо полного списка). Дополнить:
+
+```bash
+docker compose run --rm parsers python update_staff.py
+```
+
+Скрипт проходит все аниме с <=4 staff в Neo4j, заново фетчит /characters
+с правильным URL и обновляет связи. Резюмируемый — можно прервать и
+перезапустить. Ограничить количество: `--limit 100`.
+
+## Дополнение пропущенных тайтлов
+
+Сверить сезонные страницы с БД и добавить недостающие:
+
+```bash
+docker compose run --rm parsers python check_missing.py          # актуальные сезоны
+docker compose run --rm parsers python check_missing.py --all    # все сезоны (1917→)
+docker compose run --rm parsers python check_missing.py --season 2006 summer
+```
+
+Недостающие тайтлы регистрируются в очереди и обрабатываются scheduler
+при следующем цикле.
+
 ## Управление failed-тайтлами
 
 Тайтлы, обработка которых провалилась `max_attempts` раз подряд (по умолчанию 3),
@@ -68,6 +94,26 @@ curl -X POST http://localhost:8567/refresh/{mal_id}
 
 Тайтл попадёт в начало очереди со следующим циклом scheduler'а (по умолчанию —
 в течение суток, регулируется `cycle_interval_sec` в `parsers/config.yaml`).
+
+## Управление циклами scheduler
+
+Запустить цикл обработки прямо сейчас (discover + все due-тайтлы,
+включая прошлый сезон):
+
+```bash
+curl -X POST http://localhost:8567/trigger-cycle
+```
+
+Изменить интервал автоматического цикла (секунды, минимум 60):
+
+```bash
+curl -X PUT http://localhost:8567/schedule \
+  -H "Content-Type: application/json" \
+  -d '{"cycle_interval_sec": 3600}'
+```
+
+Изменение применяется немедленно и действует до перезапуска контейнера.
+Для постоянного изменения — отредактируйте `parsers/config.yaml`.
 
 ## Статус и диагностика ошибок
 
@@ -96,6 +142,8 @@ parsers/
   app.py             — вход в контейнер: FastAPI + фоновый вечный цикл scheduler'а
   scheduler_logic.py — один цикл: discover свежих сезонов + обработка due-очереди
   bootstrap.py       — РАЗОВЫЙ резюмируемый прогон архива (запускается вручную)
+  update_staff.py    — дополнение staff для уже обработанных аниме (ручной запуск)
+  check_missing.py   — сверка сезонных страниц с БД, добавление недостающих тайтлов
   processing.py      — обработка одного тайтла (общая для scheduler и bootstrap)
   discover.py        — регистрация тайтлов текущего/след./прошлого сезона в очереди
   fetcher.py         — HTTP к MyAnimeList + файловый кэш .html + рейт-лимит

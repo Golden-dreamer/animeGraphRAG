@@ -1,30 +1,27 @@
-"""HTTP-клиент для MyAnimeList с файловым кэшем и лимитами.
+"""HTTP-клиент для MyAnimeList с лимитами.
 
-Вместо Jikan API парсит HTML напрямую с myanimelist.net.
-Лимиты оставлены те же, что и у Jikan:
+Парсит HTML напрямую с myanimelist.net.
+Лимиты:
   - не более 3 запросов в секунду (минимум ~0.5 сек между запросами)
   - не более 60 запросов в минуту (скользящее окно)
 
 Все сетевые ошибки (SSL, timeout, 429, 5xx) ретраятся с экспоненциальным
-бэкоффом — до MAX_RETRIES попыток. Успешные ответы кэшируются на диске.
+бэкоффом — до MAX_RETRIES попыток.
 
-Лимиты, размер кэша и таймауты настраиваются через переменные окружения
+Лимиты, и таймауты настраиваются через переменные окружения
 (см. .env и docker-compose.yml).
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import time
 from collections import deque
-from pathlib import Path
 
 import requests
 
 log = logging.getLogger("fetcher")
 
-CACHE_DIR = Path(os.environ.get("CACHE_DIR", "/app/cache"))
 BASE_URL = os.environ.get("MAL_BASE_URL", "https://myanimelist.net")
 
 USER_AGENT = os.environ.get(
@@ -82,14 +79,6 @@ def _rate_limit():
             _request_timestamps.popleft()
 
     _last_request_ts = time.monotonic()
-
-
-def _cache_key(url: str) -> str:
-    return hashlib.sha256(url.encode()).hexdigest()
-
-
-def _cache_path(key: str) -> Path:
-    return CACHE_DIR / f"{key}.html"
 
 
 def _http_get_with_retry(url: str) -> str:
@@ -153,23 +142,12 @@ def _http_get_with_retry(url: str) -> str:
     raise requests.exceptions.RequestException(f"Unknown error fetching {url}")
 
 
-def cached_get_html(url: str, force: bool = False) -> str:
-    """GET с файловым кэшем HTML. force=True игнорирует кэш."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    key = _cache_key(url)
-    path = _cache_path(key)
-
-    if path.exists() and not force:
-        log.debug("cache hit: %s -> %s", url, key[:12])
-        return path.read_text(encoding="utf-8")
-
-    log.debug("cache miss: %s -> %s", url, key[:12])
-    html = _http_get_with_retry(url)
-    path.write_text(html, encoding="utf-8")
-    return html
+def get_html(url: str) -> str:
+    """HTTP GET с ретраями и лимитами. Возвращает HTML-текст."""
+    return _http_get_with_retry(url)
 
 
-def get_season_list(year: int, season: str, delay_sec: float, force: bool = False) -> list[dict]:
+def get_season_list(year: int, season: str, delay_sec: float) -> list[dict]:
     """Список тайтлов сезона. Возвращает [{mal_id, title, url}, ...].
 
     delay_sec не используется — рейт-лимитинг управляется внутренним механизмом.
@@ -178,72 +156,44 @@ def get_season_list(year: int, season: str, delay_sec: float, force: bool = Fals
     from mal_scraper import parse_season_page
 
     url = f"{BASE_URL}/anime/season/{year}/{season}"
-    html = cached_get_html(url, force=force)
+    html = _http_get_with_retry(url)
     return parse_season_page(html)
 
 
-def get_anime_full(mal_id: int, delay_sec: float, force: bool = False) -> dict:
+def get_anime_full(mal_id: int, delay_sec: float) -> dict:
     """Парсит основную страницу аниме + страницу characters/staff.
-
     Возвращает объединённый dict со всеми полями.
-    delay_sec не используется — сохранён для обратной совместимости.
-    """
-    from mal_scraper import parse_anime_page, parse_characters_page
 
-    # Основная страница — URL нужен с slug, но MAL редиректит любой slug
-    # Используем короткий URL: /anime/{id} — MAL редиректит на полный
+    delay_sec не используется — сохранён для обратной совместимости.
+
+    ВАЖНО: для страницы characters используется полный URL со slug
+    (/anime/{id}/{slug}/characters), а не короткий (/anime/{id}/characters).
+    MAL редиректит короткий URL на основную страницу аниме (без /characters),
+    где staff ограничен несколькими людьми. Полный URL отдаёт отдельную
+    страницу /characters с полным списком staff.
+    """
+    from mal_scraper import parse_anime_page, parse_characters_page, extract_slug_from_url
+
+    # Основная страница — MAL редиректит короткий URL на полный со slug
     url_main = f"{BASE_URL}/anime/{mal_id}"
-    html_main = cached_get_html(url_main, force=force)
+    html_main = _http_get_with_retry(url_main)
     data = parse_anime_page(html_main)
     if data is None:
         return {}
 
-    # Страница characters — нужно знать slug для URL.
-    # MAL принимает /anime/{id}/characters и редиректит на полный путь.
-    url_chars = f"{BASE_URL}/anime/{mal_id}/characters"
-    html_chars = cached_get_html(url_chars, force=force)
+    # Извлекаем slug из canonical URL основной страницы
+    # (og:url или link[rel=canonical] вида https://myanimelist.net/anime/5249/Mitsume_ga_Tooru)
+    slug = extract_slug_from_url(html_main)
+    if slug:
+        url_chars = f"{BASE_URL}/anime/{mal_id}/{slug}/characters"
+    else:
+        # Fallback: короткий URL (MAL редиректит, но staff будет неполным)
+        url_chars = f"{BASE_URL}/anime/{mal_id}/characters"
+
+    html_chars = _http_get_with_retry(url_chars)
     chars_data = parse_characters_page(html_chars)
 
     data['characters'] = chars_data.get('characters', [])
     data['staff'] = chars_data.get('staff', [])
 
     return data
-
-
-def get_cache_stats() -> dict:
-    """Возвращает статистику кэша: количество файлов, общий размер (байты)."""
-    if not CACHE_DIR.exists():
-        return {"files": 0, "size_bytes": 0, "size_mb": 0.0, "path": str(CACHE_DIR)}
-    files = list(CACHE_DIR.glob("*.html"))
-    total = sum(f.stat().st_size for f in files)
-    return {
-        "files": len(files),
-        "size_bytes": total,
-        "size_mb": round(total / (1024 * 1024), 2),
-        "path": str(CACHE_DIR),
-    }
-
-
-def clear_cache() -> int:
-    """Удаляет все файлы кэша. Возвращает количество удалённых файлов."""
-    if not CACHE_DIR.exists():
-        return 0
-    files = list(CACHE_DIR.glob("*.html"))
-    for f in files:
-        f.unlink(missing_ok=True)
-    log.info("Кэш очищен: удалено %d файлов", len(files))
-    return len(files)
-
-
-def cleanup_cache_if_over_limit(max_mb: int):
-    if not CACHE_DIR.exists():
-        return
-    files = sorted(CACHE_DIR.glob("*.html"), key=lambda f: f.stat().st_mtime, reverse=True)
-    total = sum(f.stat().st_size for f in files)
-    limit = max_mb * 1024 * 1024
-    for f in reversed(files):
-        if total <= limit:
-            break
-        total -= f.stat().st_size
-        f.unlink(missing_ok=True)
-        log.debug("cache cleanup: removed %s", f.name)
