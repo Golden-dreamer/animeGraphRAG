@@ -22,17 +22,26 @@ services:
       neo4j:
         condition: service_healthy
     ports:
-      - "8000:8000"   # FastAPI: http://<IP-машины>:8000/docs
+      - "${PARSERS_PORT:-8567}:8000"   # FastAPI: http://<IP-машины>:${PARSERS_PORT}
     environment:
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      # --- лимиты парсинга MyAnimeList (можно менять без пересборки) ---
+      API_MIN_INTERVAL_SEC: ${API_MIN_INTERVAL_SEC:-0.5}
+      API_RATE_WINDOW_SEC: ${API_RATE_WINDOW_SEC:-60}
+      API_RATE_WINDOW_MAX: ${API_RATE_WINDOW_MAX:-55}
+      API_MAX_RETRIES: ${API_MAX_RETRIES:-4}
+      API_RETRY_BASE_DELAY: ${API_RETRY_BASE_DELAY:-1.5}
+      API_RETRY_MAX_DELAY: ${API_RETRY_MAX_DELAY:-30}
+      API_HTTP_TIMEOUT: ${API_HTTP_TIMEOUT:-20}
+      MAL_BASE_URL: ${MAL_BASE_URL:-https://myanimelist.net}
+      # --- кэш ---
+      CACHE_MAX_MB: ${CACHE_MAX_MB:-10240}
     volumes:
-      - ./parsers:/app          # код монтируется — правки конфига/кода без пересборки
-      - parsers_cache:/app/cache
-      - parsers_data:/app/data  # тут лежит state.db (sqlite)
+      - ./parsers:/app                    # код монтируется — правки конфига/кода без пересборки
+      - ./parsers/cache:/app/cache        # кэш API-ответов (видно на хосте)
+      - ./parsers/data:/app/data          # state.db (SQLite)
 
 volumes:
   neo4j_data:
-  parsers_cache:
-  parsers_data:
