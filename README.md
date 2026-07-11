@@ -1,7 +1,8 @@
 # Anime GraphRAG — парсер MyAnimeList
 
-Парсер сайта MyAnimeList (HTML-скрапинг) с загрузкой в графовую БД Neo4j.
-Scheduler актуализирует текущие сезоны, bootstrap проходится по архиву с 1917 года.
+Парсер MyAnimeList (HTML-скрапинг) с загрузкой в графовую БД Neo4j.
+Scheduler актуализирует текущий, следующий и прошлый сезоны.
+Bootstrap проходится по архиву с 1917 года.
 
 ## Запуск
 
@@ -13,47 +14,42 @@ Scheduler актуализирует текущие сезоны, bootstrap пр
    ```
 
 3. Проверьте:
-   - Neo4j Browser: `http://<IP-машины>:7474` (логин `neo4j`, пароль из `.env`)
-   - FastAPI: `http://<IP-машины>:8567/docs`
+   - Neo4j Browser: `http://<IP>:7474` (логин `neo4j`, пароль из `.env`)
+   - FastAPI: `http://<IP>:8567/docs`
 
-С этого момента **scheduler уже работает сам** — он раз в сутки (настраивается)
-подтягивает текущий, следующий и прошлый сезон и обновляет данные по ним,
-обрабатывая все due-тайтлы за цикл. Лимиты (0.5s между запросами, 55 req/мин)
-соблюдаются автоматически внутри fetcher.py.
+Scheduler запускается автоматически при старте контейнера. По умолчанию —
+раз в сутки (настраивается через `cycle_interval_sec`). Лимиты MyAnimeList
+(0.5s между запросами, 55 req/мин) соблюдаются внутри `fetcher.py`.
 
 ## Первичное наполнение архива (опционально, разово)
 
-Чтобы затащить в базу все аниме с 1917 года (кроме текущего/следующего/прошлого
-сезона — те и так обслуживает scheduler), запустите:
+Загрузить все аниме с 1917 года (кроме трёх актуальных сезонов — их держит
+scheduler):
 
 ```bash
 docker compose run --rm parsers python bootstrap.py
 ```
 
-`--rm` — контейнер удалится сам после завершения, не оставляя мусора.
-Процесс резюмируем: прогресс сохраняется в SQLite, при прерывании просто
-запустите ту же команду — продолжит с места остановки, ничего не скачивая
-повторно. Кэш списка сезонов и страниц аниме хранится в `parsers/cache/`.
+Резюмируем: прогресс сохраняется в Neo4j (`title IS NULL` у необработанных
+тайтлов) и в файле `parsers/bootstrap_progress.txt` (последний обработанный
+сезон). При прерывании — просто запустите заново, продолжит с места
+остановки. Лимиты — ~27 тайтлов/мин (два запроса
+на тайтл: основная страница + characters/staff).
 
-Это займёт долго (тысячи тайтлов, ~27 тайтлов/мин из-за лимитов — по два
-запроса на тайтл: основная страница + characters/staff), но терминал можно
-закрывать, если запущено в фоне (`-d`). Без `-d` логи идут прямо в терминал,
-прерывание по `Ctrl+C` безопасно.
+Подробнее — [`docs/operations.md`](docs/operations.md).
 
-Подробнее про диагностику ошибок и статус — в [`docs/operations.md`](docs/operations.md).
+## Дополнение staff
 
-## Дополнение staff (после исправления fetcher)
-
-Если база наполнялась до исправления URL /characters (v5), staff у большинства
-аниме неполный (2-4 человека вместо полного списка). Дополнить:
+Если база наполнялась до исправления URL `/characters` (v5), staff у
+большинства аниме неполный (2-4 человека вместо полного списка):
 
 ```bash
 docker compose run --rm parsers python update_staff.py
+docker compose run --rm parsers python update_staff.py --limit 100
 ```
 
-Скрипт проходит все аниме с <=4 staff в Neo4j, заново фетчит /characters
-с правильным URL и обновляет связи. Резюмируемый — можно прервать и
-перезапустить. Ограничить количество: `--limit 100`.
+Скрипт проходит все аниме с <=4 staff в Neo4j, заново фетчит `/characters`
+с правильным URL и обновляет связи. MERGE предотвращает дубли.
 
 ## Дополнение пропущенных тайтлов
 
@@ -65,113 +61,59 @@ docker compose run --rm parsers python check_missing.py --all    # все сез
 docker compose run --rm parsers python check_missing.py --season 2006 summer
 ```
 
-Недостающие тайтлы регистрируются в очереди и обрабатываются scheduler
-при следующем цикле.
+Недостающие тайтлы регистрируются как stub'ы (`title IS NULL`), scheduler
+обработает их при следующем цикле.
 
-## Управление failed-тайтлами
-
-Тайтлы, обработка которых провалилась `max_attempts` раз подряд (по умолчанию 3),
-выходят из автоматической очереди. Дать всем второй шанс одним запросом:
+## Управление через API
 
 ```bash
-curl -X POST http://localhost:8567/failed/retry
-```
+# Статус
+curl http://localhost:8567/status
 
-Или по одному:
+# Неполные узлы (title IS NULL)
+curl http://localhost:8567/stubs
 
-```bash
+# Принудительно обновить один тайтл
 curl -X POST http://localhost:8567/refresh/{mal_id}
-```
 
-Сброшенные тайтлы получают priority=1 и обрабатываются в начале следующего
-цикла scheduler.
-
-## Принудительное обновление конкретного тайтла
-
-```bash
-curl -X POST http://localhost:8567/refresh/{mal_id}
-```
-
-Тайтл попадёт в начало очереди со следующим циклом scheduler'а (по умолчанию —
-в течение суток, регулируется `cycle_interval_sec` в `parsers/config.yaml`).
-
-## Управление циклами scheduler
-
-Запустить цикл обработки прямо сейчас (discover + все due-тайтлы,
-включая прошлый сезон):
-
-```bash
+# Запустить цикл scheduler прямо сейчас
 curl -X POST http://localhost:8567/trigger-cycle
-```
 
-Изменить интервал автоматического цикла (секунды, минимум 60):
-
-```bash
+# Изменить интервал автоматического цикла (секунды, минимум 60)
 curl -X PUT http://localhost:8567/schedule \
   -H "Content-Type: application/json" \
   -d '{"cycle_interval_sec": 3600}'
+
+# Текущая конфигурация
+curl http://localhost:8567/config
 ```
 
-Изменение применяется немедленно и действует до перезапуска контейнера.
-Для постоянного изменения — отредактируйте `parsers/config.yaml`.
-
-## Статус и диагностика ошибок
-
-```bash
-curl http://localhost:8567/status
-curl http://localhost:8567/failed
-```
-
-Подробное объяснение всех полей и типичных проблем — в
-[`docs/operations.md`](docs/operations.md). Общая архитектура и схема
-данных — в [`docs/architecture.md`](docs/architecture.md) и
-[`docs/data-model.md`](docs/data-model.md).
-
-## Управление кэшем и конфигурацией
-
-```bash
-curl http://localhost:8567/cache/stats    # размер кэша, количество файлов
-curl -X POST http://localhost:8567/cache/clear  # очистить кэш
-curl http://localhost:8567/config          # текущие лимиты, интервалы
-```
+Полный список эндпоинтов — [`docs/configuration.md`](docs/configuration.md).
 
 ## Архитектура
 
 ```
 parsers/
-  app.py             — вход в контейнер: FastAPI + фоновый вечный цикл scheduler'а
-  scheduler_logic.py — один цикл: discover свежих сезонов + обработка due-очереди
-  bootstrap.py       — РАЗОВЫЙ резюмируемый прогон архива (запускается вручную)
-  update_staff.py    — дополнение staff для уже обработанных аниме (ручной запуск)
-  check_missing.py   — сверка сезонных страниц с БД, добавление недостающих тайтлов
+  app.py             — FastAPI + фоновый цикл scheduler'а
+  scheduler_logic.py — один цикл: discover + обработка due-очереди
+  discover.py        — регистрация тайтлов 3 актуальных сезонов в графе
+  graph_state.py     — очередь/state в Neo4j (stub'ы, due-выборка, сезоны)
   processing.py      — обработка одного тайтла (общая для scheduler и bootstrap)
-  discover.py        — регистрация тайтлов текущего/след./прошлого сезона в очереди
-  fetcher.py         — HTTP к MyAnimeList + файловый кэш .html + рейт-лимит
+  fetcher.py         — HTTP к MyAnimeList + рейт-лимит + ретраи
   mal_scraper.py     — парсер HTML: сезон, страница аниме, characters/staff
   parser.py          — нормализация данных из scraper для loader
-  loader.py          — запись в Neo4j (Anime, Genre, Studio, Person, Character, ...)
-  rules.py           — когда тайтл нужно перепроверить следующий раз
-  db.py              — SQLite: состояние очереди (что и когда спарсено)
-  config.yaml        — все параметры, правится без пересборки образа
+  loader.py          — запись в Neo4j (Cypher MERGE)
+  mal_seasons.py     — утилиты сезонов: current, shift, all_seasons
+  config.py          — загрузка config.yaml + env-переменных
+  bootstrap.py       — ручной прогон архива (1917→)
+  update_staff.py    — ручной: дополнение staff для аниме с <=4 записями
+  check_missing.py   — ручной: сверка MAL ↔ Neo4j, добавление недостающих
+  config.yaml        — параметры (правится без пересборки образа)
 ```
 
-### Логика "когда обновлять" (`rules.py`)
-
-| Категория тайтла                  | Частота проверки |
-|------------------------------------|-------------------|
-| Текущий или следующий сезон        | раз в сутки       |
-| Прошлый сезон                      | раз в неделю      |
-| Младше `refresh_recent_years` лет (по умолчанию 3) | раз в год |
-| Старше                              | никогда автоматически (только через `POST /refresh/{mal_id}`) |
-
-### Bootstrap vs Scheduler
-
-- **bootstrap.py** — разовая, долгая, ресурсоёмкая операция. Идёт по всем
-  историческим сезонам (1917 → сейчас), кроме тех трёх, что держит scheduler.
-  Резюмируема на уровне сезона и на уровне отдельного тайтла.
-- **scheduler_logic.py** — лёгкий вечный цикл внутри `app.py`. Не знает про
-  архив вообще, занимается только текущим/следующим/прошлым сезоном плюс
-  принудительными обновлениями (`priority=1` из `/refresh/{mal_id}`).
-
-Обе части используют одну и ту же SQLite-таблицу `anime_progress` и один и тот
-же `processing.process_one()`, так что дублирования логики фетча/парсинга нет.
+Подробнее — [`docs/architecture.md`](docs/architecture.md).
+Модель данных — [`docs/data-model.md`](docs/data-model.md).
+Эксплуатация — [`docs/operations.md`](docs/operations.md).
+Конфигурация — [`docs/configuration.md`](docs/configuration.md).
+Changelog — [`docs/changelog.md`](docs/changelog.md).
+Cypher-запросы — [`docs/popular_cypher_commands.md`](docs/popular_cypher_commands.md).

@@ -91,7 +91,7 @@ ORDER BY anime_count DESC;
 // Все аниме конкретного сезона
 MATCH (a:Anime)
 WHERE a.year = 2024 AND a.season = 'spring'
-RETURN a.title, a.score, a.type, a.episodes, a.studios
+RETURN a.title, a.score, a.type, a.episodes
 ORDER BY a.score DESC;
 ```
 

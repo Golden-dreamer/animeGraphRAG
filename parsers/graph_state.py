@@ -1,4 +1,4 @@
-"""Состояние очереди парсинга в Neo4j (замена SQLite).
+"""Состояние очереди парсинга в Neo4j.
 
 Без SQLite, без retry-логики.
 Логика:
@@ -6,7 +6,7 @@
   - Актуальные = mal_status IN ['Currently Airing', 'Not yet aired']
   - Scheduler каждый цикл обновляет все актуальные + stub'ы
   - /refresh вызывает process_one напрямую
-  - Сезоны: узлы :Season {year, season, bootstrapped: true}
+  - Прогресс bootstrap — в текстовом файле (bootstrap_progress.txt)
 """
 from __future__ import annotations
 
@@ -102,35 +102,13 @@ def get_stats() -> dict:
         upcoming = session.run(
             "MATCH (a:Anime) WHERE a.mal_status = 'Not yet aired' RETURN count(a) AS c"
         ).single()["c"]
-        seasons_done = session.run(
-            "MATCH (s:Season) WHERE s.bootstrapped = true RETURN count(s) AS c"
-        ).single()["c"]
         return {
             "total_anime": total,
             "parsed": parsed,
             "unprocessed_stubs": stubs,
             "currently_airing": airing,
             "not_yet_aired": upcoming,
-            "seasons_bootstrapped": seasons_done,
         }
-
-
-def season_bootstrapped(year: int, season: str) -> bool:
-    with get_driver().session() as session:
-        result = session.run(
-            "MATCH (s:Season {year: $year, season: $season}) RETURN s.bootstrapped AS b",
-            year=year, season=season,
-        )
-        record = result.single()
-        return record is not None and record["b"] is True
-
-
-def mark_season_bootstrapped(year: int, season: str):
-    with get_driver().session() as session:
-        session.run(
-            "MERGE (s:Season {year: $year, season: $season}) SET s.bootstrapped = true",
-            year=year, season=season,
-        )
 
 
 def refresh_anime(mal_id: int):

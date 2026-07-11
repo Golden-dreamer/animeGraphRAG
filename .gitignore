@@ -1,6 +1,7 @@
 .env
 parsers/cache/
 parsers/data/
+parsers/bootstrap_progress.txt
 __pycache__/
 *.pyc
 .DS_Store

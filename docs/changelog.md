@@ -3,6 +3,22 @@
 Формат: дата — что изменилось и почему. Ведётся вручную, по мере значимых
 архитектурных решений (не каждый мелкий коммит).
 
+## 2026-07-12 (v9) — удаление :Season, текстовый checkpoint для bootstrap
+
+**Проблема:** узлы `:Season {year, season, bootstrapped: true}` хранили
+отметку о закрытии сезона в Neo4j — единственное назначение было checkpoint
+для resume bootstrap. Лишняя сущность в графе, не связанная ни с чем другим.
+
+**Решения:**
+- `graph_state.py`: удалены `season_bootstrapped()`, `mark_season_bootstrapped()`,
+  счётчик `seasons_bootstrapped` из `get_stats()`.
+- `bootstrap.py`: checkpoint через файл `parsers/bootstrap_progress.txt`
+  (одна строка: `2024 spring`). При старте — пропускает сезоны до checkpoint
+  включительно. Нет файла — начинает с 1917/winter. Удалить файл = начать заново.
+- Файл в `.gitignore`, переживает перезапуск контейнера через volume `./parsers`.
+- Резювируемость на уровне тайтла сохранена через `title IS NULL`.
+- `/status` больше не возвращает `seasons_bootstrapped`.
+
 ## 2026-07-11 (v8) — удаление SQLite, одна БД (Neo4j)
 
 **Проблема:** SQLite (state.db) хранил очередь задач, retry-логику и

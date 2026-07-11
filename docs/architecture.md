@@ -10,22 +10,25 @@
 │        ├── каждые cycle_interval_sec: scheduler_logic.run_cycle()          │
 │        │        │                                                          │
 │        │        ├── discover.discover_recent()  — регистрирует тайтлы      │
-│        │        │     текущего/следующего/прошлого сезона в очереди        │
+│        │        │     текущего/следующего/прошлого сезона как stub'ы       │
 │        │        │                                                          │
-│        │        └── db.select_due_anime() → processing.process_one() × N   │
+│        │        └── graph_state.select_due_anime() → processing.process_one() × N   │
 │        │                                                                    │
-│        └── HTTP-эндпоинты: /refresh/{id}, /trigger-cycle, /schedule, /status, /failed, /failed/retry  │
+│        └── HTTP-эндпоинты: /refresh/{id}, /trigger-cycle, /schedule,       │
+│            /status, /stubs, /config, /health                               │
 │                                                                              │
 │   bootstrap.py — запускается ОТДЕЛЬНО, вручную, один раз                   │
 │        └── по всем историческим сезонам (1917 → сейчас, кроме текущих 3)   │
-│            db.select_due_for_season() → processing.process_one() × N       │
+│            graph_state.select_due_for_season() → processing.process_one() × N   │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────┘
-        │                          │                         │
-        ▼                          ▼                         ▼
- cache/ (файлы .html,       data/state.db (SQLite:    Neo4j (граф:
- HTML-страницы MAL)         очередь, что и когда      Anime/Genre/Studio/
-                            обновлять)                Person/Character/...)
+        │
+        ▼
+ Neo4j (контейнер neo4j)
+   граф: Anime/Genre/Studio/Producer/Person/Character/
+         ExternalLink/StreamingPlatform/Manga
+   состояние очереди: title IS NULL = не обработан
+   прогресс bootstrap: файл bootstrap_progress.txt (на хосте через volume)
 ```
 
 ## Поток данных (один тайтл)
@@ -33,67 +36,78 @@
 ```
 processing.process_one(mal_id)
   │
-│  ├── fetcher.get_anime_full(mal_id)
-  │     ├── cached_get_html("https://myanimelist.net/anime/{id}")
+  ├── fetcher.get_anime_full(mal_id)
+  │     ├── get_html("https://myanimelist.net/anime/{id}")
   │     │     └── mal_scraper.parse_anime_page(html) → dict
-  │     ├── extract_slug_from_url(html_main) → slug (например "Mitsume_ga_Tooru")
-  │     ├── cached_get_html("https://myanimelist.net/anime/{id}/{slug}/characters")
+  │     ├── extract_slug_from_url(html_main) → slug
+  │     ├── get_html("https://myanimelist.net/anime/{id}/{slug}/characters")
   │     │     └── mal_scraper.parse_characters_page(html) → {characters, staff}
   │     └── return объединённый dict
   │
   ├── parser.extract_fields(raw) → нормализованный dict
   │     └── _derive_year_season() — фоллбэк года/сезона из aired
   │
-  ├── loader.upsert_anime(data)
-  │     ├── MERGE (:Anime {mal_id}) SET все свойства
-  │     ├── MERGE (:Genre/:Studio/:Producer) + связи
-  │     ├── MERGE (:Character) + HAS_CHARACTER
-  │     ├── MERGE (:Person) + STAFF (с ролями) + VOICE_ACTED (с языком)
-  │     ├── MERGE (:Anime/:Manga) + RELATED_TO (с типом relation)
-  │     ├── MERGE (:ExternalLink) + AVAILABLE_AT / HAS_RESOURCE
-  │     └── MERGE (:StreamingPlatform) + STREAMING_ON
-  │
-  ├── rules.compute_next_check(data, cfg) → ISO timestamp
-  └── db.mark_parsed(mal_id, mal_status, next_check_at)
+  └── loader.upsert_anime(data)
+        ├── MERGE (:Anime {mal_id}) SET все свойства
+        ├── MERGE (:Genre/:Studio/:Producer) + связи
+        ├── MERGE (:Character) + HAS_CHARACTER
+        ├── MERGE (:Person) + STAFF (с ролями) + VOICE_ACTED (с языком)
+        ├── MERGE (:Anime/:Manga) + RELATED_TO (с типом relation)
+        ├── MERGE (:ExternalLink) + AVAILABLE_AT / HAS_RESOURCE
+        └── MERGE (:StreamingPlatform) + STREAMING_ON
 ```
 
-## Модули и границы ответственности
+После успешного `upsert_anime` узел `:Anime` получает `title` (не NULL),
+что означает «обработан». При ошибке — `title` остаётся NULL, scheduler
+подберёт тайтл в следующем цикле.
 
-| Модуль | Что делает | Чего НЕ делает |
-|---|---|---|
-| `fetcher.py` | HTTP-запросы к MyAnimeList, файловый кэш `.html`, рейт-лимит | не знает про структуру данных аниме, не знает про Neo4j |
-| `mal_scraper.py` | Парсинг HTML → dict (BeautifulSoup). Три функции: сезон, аниме, characters/staff | не делает HTTP-запросов, не пишет в БД |
-| `parser.py` | Нормализация данных из scraper для loader (year/season фоллбэк) | не делает HTTP-запросов, не пишет в БД |
-| `loader.py` | dict → Cypher MERGE в Neo4j (все узлы и связи) | не знает про HTTP, не знает про SQLite |
-| `db.py` | состояние очереди в SQLite (что и когда обновлять) | не содержит доменных данных об аниме |
-| `rules.py` | считает `next_check_at` по правилам актуальности | не делает запросов, чистая функция |
-| `discover.py` | находит НОВЫЕ тайтлы (только 3 актуальных сезона) | не трогает архивные сезоны |
-| `processing.py` | склеивает fetcher → parser → loader → db для ОДНОГО тайтла | общий код для scheduler и bootstrap, чтобы не дублировать логику |
-| `scheduler_logic.py` | один цикл: discover + обработка due-очереди | не занимается историческим архивом |
-| `bootstrap.py` | разовый проход по всем историческим сезонам | не запускается автоматически, не трогает 3 активных сезона |
-| `app.py` | FastAPI + фоновый вечный цикл scheduler'а, эндпоинты управления | не содержит бизнес-логики парсинга напрямую |
-| `update_staff.py` | Ручной скрипт: дополнение staff для аниме с <=4 записями | не запускается автоматически, работает поверх существующих данных |
-| `check_missing.py` | Ручной скрипт: сверка сезонных страниц с SQLite, добавление недостающих тайтлов | не запускается автоматически, только регистрирует stubs |
+## Модули
 
-Разделение фетча (fetcher), парсинга (mal_scraper) и нормализации (parser)
-сделано специально: если понадобятся дополнительные поля, их можно добавить
-в `mal_scraper.py` и получить из уже закэшированного HTML, не делая повторных
-запросов к сайту (см. `fetcher.cached_get_html(url, force=False)`).
+| Модуль | Ответственность |
+|---|---|
+| `fetcher.py` | HTTP-запросы к MyAnimeList, рейт-лимит (0.5s + 55 req/мин), ретраи с бэкоффом |
+| `mal_scraper.py` | Парсинг HTML → dict (BeautifulSoup). Три функции: `parse_season_page`, `parse_anime_page`, `parse_characters_page` |
+| `parser.py` | Нормализация данных из scraper для loader. Фоллбэк year/season из `aired` |
+| `loader.py` | dict → Cypher MERGE в Neo4j (все узлы и связи). `upsert_anime`, `upsert_staff_only` |
+| `graph_state.py` | Состояние очереди в Neo4j. Stub'ы, due-выборка, отметки сезонов, статистика |
+| `processing.py` | Склеивает fetcher → parser → loader для одного тайтла. Общий код для scheduler и bootstrap |
+| `discover.py` | Регистрирует новые тайтлы 3 актуальных сезонов в графе (через `graph_state.upsert_anime_stub`) |
+| `scheduler_logic.py` | Один цикл: `discover_recent` + `select_due_anime` → `process_one` для каждого |
+| `bootstrap.py` | Ручной проход по всем историческим сезонам (1917→), кроме 3 актуальных |
+| `app.py` | FastAPI + фоновый цикл scheduler'а, HTTP-эндпоинты управления |
+| `update_staff.py` | Ручной скрипт: дополнение staff для аниме с <=4 записями |
+| `check_missing.py` | Ручной скрипт: сверка MAL ↔ Neo4j, добавление недостающих тайтлов |
+| `mal_seasons.py` | Утилиты сезонов: `current_season`, `shift_season`, `all_seasons` |
+| `config.py` | Загрузка `config.yaml` + env-переменных в объект `Config` |
 
-## Bootstrap vs Scheduler — почему это разделено
+## Scheduler
 
-Изначальная ошибка в проектировании (см. `docs/changelog.md`) — попытка
-объединить "разово наполнить архив" и "постоянно актуализировать свежее" в
-одну сущность. Это разные по природе задачи:
+`app.py` запускает фоновый asyncio-задачу при старте. Каждый цикл:
 
-- **bootstrap.py**: долгая (часы/дни), ресурсоёмкая, запускается вручную,
-  один раз (или пока не закроет весь архив). Резюмируема на уровне сезона
-  и отдельного тайтла — SQLite фиксирует прогресс после каждой успешной
-  обработки, прерывание не приводит к повторной работе.
-- **scheduler_logic.py**: лёгкая, работает вечно сама, никогда не завершается,
-  занимается только текущим/следующим/прошлым сезоном плюс принудительными
-  обновлениями через API.
+1. **discover** — запрашивает сезонные страницы MAL для текущего,
+   следующего и прошлого сезона. Новые тайтлы регистрируются как stub'ы
+   (`:Anime {mal_id, year, season}` с `title IS NULL`).
+2. **select_due_anime** — один запрос к Neo4j: все тайтлы с
+   `mal_status IN ['Currently Airing', 'Not yet aired']` OR `title IS NULL`.
+   Приоритет: stub'ы (0) → airing (1) → upcoming (2).
+3. **process_one** для каждого mal_id — фетчит, парсит, льёт в Neo4j.
+4. Цикл завершается. Таймер следующего запуска отсчитывается от конца
+   обработки.
 
-Обе части используют общий `processing.process_one()` и одну и ту же таблицу
-`anime_progress`, поэтому нет риска, что они "не знают" друг о друге и
-обработают один и тот же тайтл дважды параллельно с разной логикой.
+`select_due_anime` вызывается один раз (без `while True`) — после обработки
+тайтлы с `title IS NOT NULL` и `mal_status = 'Finished Airing'` выпадают
+из выборки, повторного сканирования не происходит.
+
+## Bootstrap vs Scheduler
+
+- **bootstrap.py**: долгая (часы/дни), запускается вручную, один раз.
+  Идёт по всем сезонам 1917 → сейчас, кроме трёх актуальных. Резюмируема:
+  файл `bootstrap_progress.txt` отмечает последний обработанный сезон,
+  `title IS NULL` — необработанные тайтлы внутри сезона. Ошибки отдельных
+  тайтлов не роняют процесс.
+- **scheduler_logic.py**: лёгкий цикл внутри `app.py`. Текущий/следующий/
+  прошлый сезон + принудительные обновления через `/refresh/{mal_id}`.
+
+Обе части используют общий `processing.process_one()` и пишут в одну БД
+(Neo4j), поэтому нет риска параллельной обработки одного тайтла с разной
+логикой.

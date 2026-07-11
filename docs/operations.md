@@ -6,29 +6,23 @@
 docker compose up -d --build
 ```
 
-С этого момента scheduler работает сам: раз в `cycle_interval_sec` (по
-умолчанию — раз в сутки, 86400 сек) подтягивает текущий/следующий/прошлый
-сезон и обрабатывает **все** due-тайтлы (без ограничения batch_size).
-
-Лимиты парсинга MyAnimeList (0.5s между запросами, 55 req/мин)
-enforcement'ятся внутри fetcher.py автоматически — scheduler не упрётся в
-лимиты и не будет заблокирован сайтом.
+Scheduler работает сам: раз в `cycle_interval_sec` (по умолчанию 86400 —
+раз в сутки) регистрирует новые тайтлы 3 актуальных сезонов и обрабатывает
+все due-тайтлы. Лимиты MyAnimeList (0.5s между запросами, 55 req/мин)
+соблюдаются внутри `fetcher.py` автоматически.
 
 Порт FastAPI по умолчанию — `8567` (меняется через `PARSERS_PORT` в `.env`).
 
-Ничего дополнительно нажимать не нужно для актуальных тайтлов.
-
 ## Первичное наполнение архива (bootstrap)
 
-Проходит все сезоны с 1917 года до текущего (кроме текущего/следующего/прошлого
-— те держит scheduler). Резюмируем: прогресс в SQLite, при прерывании —
-просто запустите заново.
+Проходит все сезоны с 1917 года до текущего (кроме текущего/следующего/
+прошлого — те держит scheduler). Прогресс сезонов — в файле `bootstrap_progress.txt` (последний обработанный
+сезон). Тайтлы внутри сезона — через `title IS NULL`: необработанные
+попадают в `select_due_for_season`, обработанные пропускаются.
 
 ```bash
 docker compose run --rm parsers python bootstrap.py
 ```
-
-`--rm` — контейнер удалится сам после завершения.
 
 В фоне (чтобы закрыть терминал):
 
@@ -41,39 +35,48 @@ docker compose run -d --name bootstrap parsers python bootstrap.py
 docker logs -f bootstrap
 ```
 
-Остановить (безопасно, прогресс в SQLite сохранён):
+Остановить (безопасно, прогресс сохранён):
 ```bash
 docker stop bootstrap && docker rm bootstrap
 ```
 
-Продолжить с того же места позже — запустить ту же команду заново. Он не будет:
-- повторно обрабатывать тайтлы, у которых `last_parsed_at` уже проставлен;
-- пересканировать сезоны, помеченные в `seasons_bootstrapped`.
+Продолжить с того же места — запустить ту же команду заново. Он не будет:
+- повторно обрабатывать тайтлы, у которых `title` уже проставлен;
+- пересканировать сезоны до checkpoint'а в `bootstrap_progress.txt`.
 
-## Как понять, что что-то пошло не так
+Чтобы начать bootstrap с самого начала — удалите `parsers/bootstrap_progress.txt`.
+
+Если в БД остались узлы `:Season` от предыдущих версий (до v9), их можно
+удалить:
+```cypher
+MATCH (s:Season) DETACH DELETE s
+```
+
+## Мониторинг
 
 ```bash
 curl http://localhost:8567/status
 ```
 
-Пример ответа и что он значит:
+Пример ответа:
 
 ```json
 {
-  "total_anime": 20392,           // всего узлов :Anime в графе
-  "parsed": 20243,                // обработаны (title IS NOT NULL)
-  "unprocessed_stubs": 149,       // не обработаны (title IS NULL) — scheduler попробует снова
-  "currently_airing": 257,        // mal_status = 'Currently Airing'
-  "not_yet_aired": 57,            // mal_status = 'Not yet aired'
-  "seasons_bootstrapped": 437     // закрытых сезонов (узлы :Season)
+  "total_anime": 20392,
+  "parsed": 20243,
+  "unprocessed_stubs": 149,
+  "currently_airing": 257,
+  "not_yet_aired": 57
 }
 ```
 
-### Неполные узлы (stubs)
+- `total_anime` — всего узлов `:Anime` в графе.
+- `parsed` — обработаны (`title IS NOT NULL`).
+- `unprocessed_stubs` — не обработаны (`title IS NULL`). Scheduler
+  попробует снова в следующем цикле.
+- `currently_airing` / `not_yet_aired` — `mal_status` из MAL.
 
-Если `unprocessed_stubs > 0` — есть тайтлы, которые не были обработаны
-(ошибка сети, парсинга, сайт был недоступен). Scheduler попробует снова
-в следующем цикле. Посмотреть конкретные тайтлы:
+### Неполные узлы (stubs)
 
 ```bash
 curl http://localhost:8567/stubs
@@ -91,34 +94,22 @@ curl -X POST http://localhost:8567/refresh/{mal_id}
 curl -X POST http://localhost:8567/trigger-cycle
 ```
 
-## Что происходит при ошибке автоматически (без вашего участия)
+## Что происходит при ошибке
 
 1. Ошибка при обработке тайтла (сетевая, парсинг, что угодно) → логируется,
-   тайтл остаётся stub (title IS NULL).
+   тайтл остаётся stub (`title IS NULL`).
 2. Scheduler при следующем цикле снова берёт все Currently Airing +
    Not yet aired + stub'ы → пытается снова.
-3. Для архивных тайтлов: /refresh/{mal_id} для принудительного обновления,
+3. Для архивных тайтлов: `/refresh/{mal_id}` для принудительного обновления,
    или перезапуск bootstrap.
 4. Никаких retry-счётчиков, статусов failed, или next_check_at —
-   просто "нет title → попробовать снова".
-
-## Принудительное обновление конкретного тайтла
-
-```bash
-curl -X POST http://localhost:8567/refresh/{mal_id}
-```
-
-Обновляет тайтл прямо сейчас (прямой вызов process_one), без очереди.
-Полезно: изменился рейтинг у архивного тайтла; тайтл остался stub;
-данные явно устарели.
+   просто «нет title → попробовать снова».
 
 ## Просмотр графа
 
-Neo4j Browser: `http://<IP-машины-в-локальной-сети>:7474`
-(логин `neo4j`, пароль — из `.env`).
-
-Порты в `docker-compose.yml` не ограничены `127.0.0.1`, поэтому доступ
-работает с любого устройства в той же локальной сети, не только с хоста.
+Neo4j Browser: `http://<IP>:7474` (логин `neo4j`, пароль — из `.env`).
+Порты в `docker-compose.yml` не ограничены `127.0.0.1` — доступ работает
+с любого устройства в локальной сети.
 
 На нодах `:Anime` отображается свойство `title` (алиас `title_original`).
 Для существующих нод без `title` — одноразовая команда в Neo4j Browser:
@@ -146,10 +137,7 @@ docker compose restart parsers
 curl -X POST http://localhost:8567/trigger-cycle
 ```
 
-Выполняет discover (текущий/следующий/прошлый сезон) и обрабатывает все
-due-тайтлы. Влияет на все три актуальных сезона, включая прошлый
-(который обычно обновляется раз в неделю). Если цикл уже выполняется —
-возвращает 409 Conflict.
+Если цикл уже выполняется — возвращает 409 Conflict.
 
 ### Изменить интервал автоматического цикла
 
@@ -159,25 +147,25 @@ curl -X PUT http://localhost:8567/schedule \
   -d '{"cycle_interval_sec": 3600}'
 ```
 
-Минимум 60 секунд. Изменение применяется немедленно и действует до
-перезапуска контейнера. Для постоянного изменения — отредактируйте
-`config.yaml` (параметр `cycle_interval_sec`).
+Минимум 60 секунд. Действует до перезапуска контейнера. Для постоянного
+изменения — отредактируйте `config.yaml`.
 
-## Дополнение staff (после исправления fetcher)
+## Утилитные скрипты
 
-Если база наполнялась до v5, staff у большинства аниме неполный.
-Дополнить одним скриптом:
+### Дополнение staff
+
+Если база наполнялась до v5, staff у большинства аниме неполный:
 
 ```bash
 docker compose run --rm parsers python update_staff.py
+docker compose run --rm parsers python update_staff.py --limit 100
+docker compose run --rm parsers python update_staff.py --threshold 4
 ```
 
-Проходит все аниме с <=4 staff в Neo4j, фетчит /characters с правильным
-URL и обновляет связи. Резюмируемый, можно ограничить: `--limit 100`.
+Проходит все аниме с staff <= threshold (по умолчанию 4), фетчит
+`/characters` с правильным URL, обновляет связи через `upsert_staff_only`.
 
-## Дополнение пропущенных тайтлов
-
-Сверить сезонные страницы с БД и добавить недостающие:
+### Дополнение пропущенных тайтлов
 
 ```bash
 docker compose run --rm parsers python check_missing.py          # актуальные
@@ -185,5 +173,6 @@ docker compose run --rm parsers python check_missing.py --all    # все сез
 docker compose run --rm parsers python check_missing.py --season 2006 summer
 ```
 
-Недостающие тайтлы регистрируются в очереди, scheduler обработает их
-при следующем цикле (или сразу через `POST /trigger-cycle`).
+Сверяет сезонные страницы MAL с Neo4j, добавляет недостающие как stub'ы.
+Scheduler обработает их при следующем цикле (или сразу через
+`POST /trigger-cycle`).

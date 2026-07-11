@@ -6,13 +6,9 @@
 Полная страница /characters (со slug в URL) содержит всех участников.
 
 Этот скрипт:
-  1. Запрашивает Neo4j: какие аниме имеют <= MAX_STAFF_THRESHOLD staff-связей
+  1. Запрашивает Neo4j: какие аниме имеют <= threshold staff-связей
   2. Для каждого заново фетчит /characters страницу (с правильным slug)
   3. Парсит staff и обновляет связи в Neo4j (MERGE — не дублирует)
-  4. Помечает в SQLite, что staff обновлён
-
-Полностью резюмируемый: можно прервать и перезапустить, прогресс
-сохраняется в SQLite (таблица staff_refreshed).
 
 Запуск:
     docker compose run --rm parsers python update_staff.py

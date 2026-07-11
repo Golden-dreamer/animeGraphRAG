@@ -1,13 +1,12 @@
 # Документация
 
-- [architecture.md](./architecture.md) — из чего состоит проект, как модули друг с другом связаны
-- [data-model.md](./data-model.md) — схема SQLite и графа Neo4j
-- [operations.md](./operations.md) — как запускать, останавливать, диагностировать проблемы
-- [configuration.md](./configuration.md) — справочник по всем параметрам `config.yaml`
+- [architecture.md](./architecture.md) — из чего состоит проект, как модули связаны
+- [data-model.md](./data-model.md) — схема графа Neo4j: узлы, связи, индексы
+- [configuration.md](./configuration.md) — справочник по параметрам (.env, config.yaml, docker-compose.yml) и API-эндпоинтам
+- [operations.md](./operations.md) — запуск, мониторинг, диагностика, утилитные скрипты
 - [changelog.md](./changelog.md) — история значимых изменений
+- [popular_cypher_commands.md](./popular_cypher_commands.md) — примеры Cypher-запросов к графу
 
-Статус: **GraphRAG-парсер MyAnimeList**. Прямой HTML-скрапинг (без Jikan API),
-полная модель данных (аниме, персонажи, voice actors, staff, related entries,
-ресурсы, стриминг), работает локально через `docker compose up`.
-API: ручной запуск цикла (`/trigger-cycle`), управление интервалом (`/schedule`),
-скрипты дополнения staff (`update_staff.py`) и пропущенных тайтлов (`check_missing.py`).
+Стек: Python 3.12, FastAPI, Neo4j 5, BeautifulSoup4, Docker Compose.
+Источник данных: MyAnimeList (прямой HTML-скрапинг, без сторонних API).
+Единственная БД: Neo4j (граф + состояние очереди).

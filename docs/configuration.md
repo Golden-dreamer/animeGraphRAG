@@ -1,8 +1,9 @@
 # Конфигурация
 
-Настройки разделены на два уровня: `.env` (креды, порты, лимиты) и
-`parsers/config.yaml` (правила обновления тайтлов). Все параметры `.env`
-можно поменять без пересборки образа — достаточно `docker compose restart`.
+Настройки разделены на три уровня: `.env` (креды, порты, лимиты API),
+`parsers/config.yaml` (параметры scheduler), `docker-compose.yml` (память
+Neo4j). Все параметры `.env` и `config.yaml` можно менять без пересборки
+образа — достаточно `docker compose restart`.
 
 ## `.env` (корень проекта)
 
@@ -25,22 +26,28 @@
 
 | Параметр | Env-переменная | По умолчанию | Смысл |
 |---|---|---|---|
-| `batch_size` | `BATCH_SIZE` | `50` | размер порции для запроса к БД (не лимитирует API) |
-| `cycle_interval_sec` | `CYCLE_INTERVAL_SEC` | `86400` | пауза между циклами (1 раз в день) |
-| `max_attempts` | `MAX_ATTEMPTS` | `3` | retry до пометки `failed` |
-| `retry_backoff_minutes` | `RETRY_BACKOFF_MINUTES` | `5` | пауза перед повтором после ошибки |
-| `refresh_current_days` | — | `1` | как часто обновлять текущий/следующий сезон |
-| `refresh_previous_days` | — | `7` | как часто обновлять прошлый сезон |
-| `refresh_recent_years` | — | `3` | тайтлы младше — "относительно новые" |
-| `refresh_recent_days` | — | `365` | как часто обновлять "относительно новые" |
+| `batch_size` | `BATCH_SIZE` | `50` | размер порции для запроса к БД в bootstrap |
+| `cycle_interval_sec` | `CYCLE_INTERVAL_SEC` | `86400` | пауза между циклами scheduler (1 раз в день) |
+| `request_delay_sec` | `REQUEST_DELAY_SEC` | `1.2` | параметр передаётся в fetcher, но не используется (рейт-лимит управляется внутренними механизмами) |
+
+## `docker-compose.yml` — память Neo4j
+
+| Переменная | Значение | Смысл |
+|---|---|---|
+| `NEO4J_server_memory_heap_initial__size` | `1G` | Начальный размер heap (транзакции, запросы) |
+| `NEO4J_server_memory_heap_max__size` | `4G` | Максимум heap (растёт при нагрузке) |
+| `NEO4J_server_memory_pagecache_size` | `2G` | Кэш данных на диске |
+
+Изменения применяются при `docker compose restart neo4j`. Не требуют
+пересборки образа.
 
 ## FastAPI эндпоинты
 
 | Метод | Путь | Смысл |
 |---|---|---|
 | GET | `/status` | статистика (total, parsed, stubs, airing, seasons) |
-| GET | `/stubs` | неполные узлы — Anime с title IS NULL |
-| POST | `/refresh/{mal_id}` | принудительно обновить один тайтл (прямой вызов) |
+| GET | `/stubs` | неполные узлы — Anime с `title IS NULL` |
+| POST | `/refresh/{mal_id}` | принудительно обновить один тайтл (прямой вызов `process_one`) |
 | POST | `/trigger-cycle` | запустить цикл scheduler прямо сейчас (discover + due-очередь) |
 | PUT | `/schedule` | изменить интервал автоматического цикла (`cycle_interval_sec`) |
 | GET | `/config` | текущие лимиты, интервалы |
@@ -48,10 +55,9 @@
 
 ### POST /trigger-cycle
 
-Запускает цикл scheduler немедленно, не дожидаясь таймера. Выполняет
-discover (текущий/следующий/прошлый сезон) и обрабатывает все due-тайтлы.
-Влияет на все три актуальных сезона, включая прошлый (который обычно
-обновляется раз в неделю). Если цикл уже выполняется — возвращает 409.
+Запускает цикл scheduler немедленно. Выполняет discover (текущий/
+следующий/прошлый сезон) и обрабатывает все due-тайтлы. Если цикл уже
+выполняется — возвращает 409.
 
 ```bash
 curl -X POST http://localhost:8567/trigger-cycle
@@ -59,9 +65,9 @@ curl -X POST http://localhost:8567/trigger-cycle
 
 ### PUT /schedule
 
-Меняет `cycle_interval_sec` — как часто scheduler запускается автоматически.
-Минимум 60 секунд. Изменение применяется немедленно и действует до
-перезапуска контейнера (для постоянного изменения — отредактируйте `config.yaml`).
+Меняет `cycle_interval_sec`. Минимум 60 секунд. Изменение применяется
+немедленно и действует до перезапуска контейнера (для постоянного
+изменения — отредактируйте `config.yaml`).
 
 ```bash
 curl -X PUT http://localhost:8567/schedule \
@@ -69,36 +75,20 @@ curl -X PUT http://localhost:8567/schedule \
   -d '{"cycle_interval_sec": 3600}'
 ```
 
-## Настройки Neo4j (docker-compose.yml)
+### POST /refresh/{mal_id}
 
-| Переменная | Значение | Смысл |
-|---|---|---|
-| `NEO4J_server_memory_heap_initial__size` | `1G` | Начальный размер heap (транзакции, запросы) |
-| `NEO4J_server_memory_heap_max__size` | `4G` | Максимум heap (растёт при нагрузке) |
-| `NEO4J_server_memory_pagecache_size` | `2G` | Кэш данных на диске (весь 905MB граф помещается с запасом) |
+Обновляет тайтл прямо сейчас (прямой вызов `process_one`), без очереди.
+Полезно: изменился рейтинг у архивного тайтла; тайтл остался stub;
+данные явно устарели.
 
-Изменения применяются при `docker compose restart neo4j` (или полном
-`docker compose up -d`). Не требуют пересборки образа.
+```bash
+curl -X POST http://localhost:8567/refresh/5249
+```
 
-### Индексы и констрейнты
-
-Созданы через Cypher (см. [data-model.md](data-model.md)). Констрейнты
-хранятся в самой БД Neo4j — не теряются при перезапуске. Для проверки:
+## Проверка индексов Neo4j
 
 ```bash
 docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
   "SHOW CONSTRAINTS YIELD name, type, labelsOrTypes, properties
    RETURN name, type, labelsOrTypes, properties ORDER BY labelsOrTypes;"
-```
-
-## Кэш
-
-Файловый кэш HTML-страниц удалён в v7 (бессмертный кэш без TTL скрывал
-обновления MAL). Все HTTP-запросы идут напрямую на myanimelist.net с
-ретраями и лимитами (0.5s интервал, 55 req/мин). Резюмируемость
-обеспечивается SQLite (status='ok', next_check_at).
-
-Папка parsers/cache/ (5.9 GB) — удалить вручную:
-```bash
-chmod -R u+w parsers/cache && rm -rf parsers/cache
 ```
