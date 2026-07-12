@@ -117,3 +117,19 @@ parsers/
 Конфигурация — [`docs/configuration.md`](docs/configuration.md).
 Changelog — [`docs/changelog.md`](docs/changelog.md).
 Cypher-запросы — [`docs/popular_cypher_commands.md`](docs/popular_cypher_commands.md).
+
+## GraphRAG UI
+
+Веб-интерфейс для запросов к графу на естественном языке (порт 8666):
+
+```bash
+docker compose up -d graphrag
+```
+
+URL: `http://localhost:8666`
+
+Пайплайн: вопрос → LLM генерирует Cypher-запрос → Neo4j → LLM формулирует
+ответ на русском. Cypher показывается в интерфейсе (раскрывающийся блок).
+Модель LLM настраивается через `.env` (`GRAPHRAG_LLM_MODEL`, по умолчанию
+`glm-5.2`). Подробнее — [`docs/architecture.md`](docs/architecture.md)
+и [`docs/operations.md`](docs/operations.md).

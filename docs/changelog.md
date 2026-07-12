@@ -3,6 +3,36 @@
 Формат: дата — что изменилось и почему. Ведётся вручную, по мере значимых
 архитектурных решений (не каждый мелкий коммит).
 
+## 2026-07-12 (v11) — исправления GraphRAG промпта, markdown-рендеринг
+
+- `graphrag.py`: CYPHER_SYSTEM_PROMPT — явно указано направление связей
+  `(Anime)-[:STAFF]->(Person)`, запрет поиска по русским названиям, exact
+  match для roles. Пустой Cypher обрабатывается как invalid (не 3 попытки).
+- `frontend/`: markdown-рендеринг ответов через marked.js, CSS-стили для
+  таблиц, заголовков, списков.
+
+## 2026-07-12 (v10) — GraphRAG frontend
+
+**Добавлено:** веб-интерфейс для запросов к графу Neo4j на естественном
+языке. Отдельный контейнер `graphrag` (порт 8666).
+
+- `backend/` — FastAPI сервер:
+  - `graphrag.py`: пайплайн question → LLM генерирует Cypher → Neo4j →
+    LLM формулирует ответ. Самопроверка: при синтаксической ошибке Cypher —
+    повтор до 3 попыток.
+  - `main.py`: API чатов (`/api/chats`), запросы (`/api/chats/{id}/ask`),
+    логи (`/api/logs`), health (`/api/health`). Раздаёт статику `frontend/`.
+  - `db.py`: SQLite для чатов, сообщений и логов Cypher-запросов.
+  - LLM — OpenAI-compatible, настраивается через `.env`:
+    `GRAPHRAG_LLM_BASE_URL`, `GRAPHRAG_LLM_MODEL` (по умолчанию `glm-5.2`),
+    `OLLAMA_API_KEY`, `GRAPHRAG_LLM_MAX_TOKENS`.
+- `frontend/` — статика (index.html, style.css, app.js). ChatGPT-like UI:
+  список чатов слева, поле ввода, ответы с раскрывающимся Cypher.
+- `docker-compose.yml` — новый сервис `graphrag`: `depends_on neo4j`,
+  порт 8666, volume `graphrag_data` для SQLite.
+
+Модель данных Neo4j не изменилась — GraphRAG только читает граф.
+
 ## 2026-07-12 (v9) — удаление :Season, текстовый checkpoint для bootstrap
 
 **Проблема:** узлы `:Season {year, season, bootstrapped: true}` хранили

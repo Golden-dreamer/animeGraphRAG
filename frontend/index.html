@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anime GraphRAG</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <button class="new-chat-btn" id="newChatBtn">+ Новый чат</button>
+      </div>
+      <div class="chat-list" id="chatList"></div>
+      <div class="sidebar-footer">
+        <a href="/api/logs" target="_blank" class="logs-link">Логи запросов</a>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <div class="chat-header">
+        <button class="toggle-sidebar" id="toggleSidebar">☰</button>
+        <span class="chat-title" id="chatTitle">Anime GraphRAG</span>
+      </div>
+
+      <div class="messages" id="messages">
+        <div class="welcome">
+          <h1>Anime GraphRAG</h1>
+          <p>Спросите меня о любом аниме, режиссёре, студии, сэйю или персонаже.</p>
+          <div class="examples">
+            <button class="example-btn" data-q="Кто режиссёр Атаки Титанов и над какими проектами он ещё работал?">Кто режиссёр Атаки Титанов?</button>
+            <button class="example-btn" data-q="Топ-10 аниме студии Kyoto Animation по оценкам">Топ аниме KyoAni</button>
+            <button class="example-btn" data-q="Какие жанры у One Piece?">Жанры One Piece</button>
+            <button class="example-btn" data-q="Сэйю с наибольшим числом ролей">Топ сэйю по ролям</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <div class="input-wrapper">
+          <textarea id="input" placeholder="Спросите о любом аниме..." rows="1"></textarea>
+          <button class="send-btn" id="sendBtn" disabled>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

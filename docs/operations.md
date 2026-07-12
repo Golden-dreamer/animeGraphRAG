@@ -94,6 +94,31 @@ curl -X POST http://localhost:8567/refresh/{mal_id}
 curl -X POST http://localhost:8567/trigger-cycle
 ```
 
+## GraphRAG
+
+Веб-интерфейс для запросов к графу на естественном языке. Порт 8666.
+
+```bash
+docker compose up -d graphrag
+```
+
+URL: `http://localhost:8666`
+
+Пайплайн: вопрос → LLM генерирует Cypher → Neo4j → LLM формулирует ответ.
+Cypher-запрос показывается в интерфейсе (раскрывающийся блок под ответом).
+
+Логи всех запросов (включая ошибки и число попыток):
+
+```bash
+curl http://localhost:8666/api/logs?limit=50
+```
+
+Проверка живости:
+
+```bash
+curl http://localhost:8666/api/health
+```
+
 ## Что происходит при ошибке
 
 1. Ошибка при обработке тайтла (сетевая, парсинг, что угодно) → логируется,

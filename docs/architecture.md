@@ -111,3 +111,40 @@ processing.process_one(mal_id)
 Обе части используют общий `processing.process_one()` и пишут в одну БД
 (Neo4j), поэтому нет риска параллельной обработки одного тайтла с разной
 логикой.
+
+## GraphRAG
+
+Веб-интерфейс для запросов к графу Neo4j на естественном языке. Отдельный
+контейнер `graphrag` (порт 8666), не зависит от `parsers`.
+
+```
+┌──────────────────────────── контейнер graphrag ────────────────────────────┐
+│                                                                              │
+│   backend/                                                                   │
+│     main.py (FastAPI, порт 8000 внутри контейнера → 8666 снаружи)          │
+│        ├── раздаёт статику frontend/ (index.html, style.css, app.js)       │
+│        ├── /api/chats — CRUD чатов (SQLite)                                 │
+│        ├── /api/chats/{id}/ask — основной пайплайн                          │
+│        └── /api/logs, /api/health                                           │
+│                                                                              │
+│     graphrag.py — пайплайн question → answer:                              │
+│        1. LLM генерирует Cypher (схема графа в system prompt)              │
+│        2. Cypher выполняется в Neo4j                                        │
+│        3. LLM формулирует ответ на русском из результатов                   │
+│        Самопроверка: при синтаксической ошибке — повтор до 3 попыток       │
+│                                                                              │
+│     db.py — SQLite: chats, messages, query_logs                             │
+│                                                                              │
+│   frontend/ (статика, монтируется в /frontend)                             │
+│     ChatGPT-like UI: список чатов слева, поле ввода,                        │
+│     ответы с раскрывающимся Cypher-запросом,                                │
+│     markdown-рендеринг ответов (marked.js)                                 │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+ Neo4j (контейнер neo4j) — та же БД, что и для parsers
+```
+
+LLM — OpenAI-compatible API, настраивается через `.env`
+(`GRAPHRAG_LLM_BASE_URL`, `GRAPHRAG_LLM_MODEL`). По умолчанию — `glm-5.2`.
