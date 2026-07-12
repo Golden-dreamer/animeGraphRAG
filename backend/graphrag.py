@@ -102,12 +102,20 @@ CYPHER_SYSTEM_PROMPT = f"""\
 5. "Режиссёр" = ANY(r IN rel.roles WHERE toLower(r) = 'director').
    'Director' и 'ADR Director' — разные. Используй exact match toLower(r) = 'director'.
 6. "Сэйю"/"актёр озвучки" = Person через VOICE_ACTED к Character.
-7. Ограничивай результат LIMIT, если не просят "все".
+7. LIMIT — ТОЛЬКО когда пользователь явно просит конкретное число ("топ-5", \
+"лучшие 3", "покажи 10"). Во всех остальных случаях НЕ добавляй LIMIT — \
+бэкенд сам ограничит объём данных. Произвольный LIMIT обрезает результаты \
+и приводит к неполным ответам.
 8. Сортируй по score DESC или year, если релевантно.
 9. Для "все проекты человека": сначала найди Person по имени/ID, потом\
    MATCH (a:Anime)-[:STAFF]->(p) RETURN a.title.
 10. Если запрос не имеет смысла в этой схеме — верни "INVALID".
-11. Ответы на русском потом сформулирует другая часть системы — ты только Cypher.
+11. Если вопрос неоднозначен или не хватает данных для точного запроса \
+   (например, неясно о каком именно тайтле речь, или пользователь не уточнил \
+   что именно хочет узнать) — верни "CLARIFY: <уточняющий вопрос на русском>".
+   Пример: вопрос "сколько серий" без указания тайтла → \
+   "CLARIFY: О каком аниме идёт речь?"
+12. Ответы на русском потом сформулирует другая часть системы — ты только Cypher.
 """
 
 ANSWER_SYSTEM_PROMPT = """\
@@ -223,6 +231,21 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
                 "answer": "Не нашёл информации по этому запросу. Я могу отвечать на вопросы о тайтлах, студиях, жанрах, персонажах, сэйю, режиссёрах и связях между ними.",
                 "cypher": cypher or "(empty)",
                 "status": "invalid",
+                "rows": 0,
+                "attempts": attempts,
+                "error": None,
+            }
+
+        # CLARIFY — модели не хватает данных для точного запроса
+        if cypher.strip().upper().startswith("CLARIFY:"):
+            clarify_question = cypher.strip()[len("CLARIFY:"):].strip()
+            log.info("LLM requested clarification: %s", clarify_question)
+            if chat_id:
+                db.log_query(chat_id, question, cypher, "clarify", 0, None, attempts)
+            return {
+                "answer": clarify_question,
+                "cypher": cypher,
+                "status": "clarify",
                 "rows": 0,
                 "attempts": attempts,
                 "error": None,

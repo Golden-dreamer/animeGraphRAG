@@ -98,7 +98,7 @@ curl -X POST http://localhost:8567/refresh/5249
 | DELETE | `/api/chats/{id}` | удалить чат |
 | PUT | `/api/chats/{id}` | переименовать чат |
 | GET | `/api/chats/{id}/messages` | сообщения чата |
-| POST | `/api/chats/{id}/ask` | вопрос к графу (`{"message": "..."}`) — возвращает `answer`, `cypher`, `status`, `rows`, `attempts` |
+| POST | `/api/chats/{id}/ask` | вопрос к графу (`{"message": "..."}`) — возвращает `answer`, `cypher`, `status` (ok/empty/error/invalid/clarify), `rows`, `attempts` |
 | GET | `/api/logs?limit=50` | логи Cypher-запросов |
 | GET | `/api/health` | проверка живости + текущая модель LLM |
 

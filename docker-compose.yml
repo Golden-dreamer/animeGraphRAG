@@ -43,6 +43,28 @@ services:
     volumes:
       - ./parsers:/app                    # код монтируется — правки конфига/кода без пересборки
 
+  sandbox:
+    build: ./sandbox
+    restart: "no"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      GRAPHRAG_LLM_BASE_URL: ${GRAPHRAG_LLM_BASE_URL:-https://ollama.com/v1}
+      GRAPHRAG_LLM_API_KEY: ${OLLAMA_API_KEY}
+      GRAPHRAG_LLM_MODEL: ${GRAPHRAG_LLM_MODEL:-glm-5.2}
+      GRAPHRAG_LLM_MAX_TOKENS: ${GRAPHRAG_LLM_MAX_TOKENS:-8192}
+      GRAPHRAG_DB_PATH: /data/graphrag.db
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - ./parsers:/app/parsers
+      - graphrag_data:/data
+    entrypoint: ["sleep", "infinity"]
+
   graphrag:
     build: ./backend
     restart: unless-stopped

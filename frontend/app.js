@@ -150,7 +150,9 @@ function addBotMessage(text, meta) {
     const statusText = meta.status === 'ok' ? `${meta.rows} строк` :
                        meta.status === 'empty' ? 'пусто' :
                        meta.status === 'error' ? `ошибка (${meta.attempts} попыток)` :
-                       meta.status === 'invalid' ? 'неподходящий вопрос' : meta.status;
+                       meta.status === 'invalid' ? 'неподходящий вопрос' :
+                       meta.status === 'clarify' ? 'уточняющий вопрос' :
+                       meta.status;
     metaHtml = `
       <div class="msg-meta" onclick="this.querySelector('.cypher').style.display = this.querySelector('.cypher').style.display === 'none' ? 'block' : 'none'">
         Cypher: ${statusText} (попыток: ${meta.attempts})

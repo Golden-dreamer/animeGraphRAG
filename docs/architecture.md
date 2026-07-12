@@ -129,9 +129,13 @@ processing.process_one(mal_id)
 │                                                                              │
 │     graphrag.py — пайплайн question → answer:                              │
 │        1. LLM генерирует Cypher (схема графа в system prompt)              │
+│           Если данных не хватает — возвращает "CLARIFY: <вопрос>"          │
+│           Если вопрос не подходит для графа — возвращает "INVALID"        │
 │        2. Cypher выполняется в Neo4j                                        │
 │        3. LLM формулирует ответ на русском из результатов                   │
 │        Самопроверка: при синтаксической ошибке — повтор до 3 попыток       │
+│        LIMIT — только при явном запросе числа ("топ-5"), бэкенд           │
+│        сам ограничивает до 100 строк для LLM                               │
 │                                                                              │
 │     db.py — SQLite: chats, messages, query_logs                             │
 │                                                                              │
@@ -148,3 +152,14 @@ processing.process_one(mal_id)
 
 LLM — OpenAI-compatible API, настраивается через `.env`
 (`GRAPHRAG_LLM_BASE_URL`, `GRAPHRAG_LLM_MODEL`). По умолчанию — `glm-5.2`.
+
+## Sandbox-контейнер
+
+Изолированная среда для тестов и отладки. Не запускается автоматически
+(`restart: no`), запускается вручную: `docker compose up -d sandbox`.
+
+Python 3.12, curl, jq, pytest, neo4j driver, requests. Код проекта
+монтируется через volumes (backend, frontend, parsers) — правки видны
+без пересборки. Доступ к Neo4j и GraphRAG API изнутри контейнера.
+
+Использование: `docker exec anime-sandbox <cmd>`.
