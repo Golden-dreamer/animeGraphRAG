@@ -153,13 +153,4 @@ processing.process_one(mal_id)
 LLM — OpenAI-compatible API, настраивается через `.env`
 (`GRAPHRAG_LLM_BASE_URL`, `GRAPHRAG_LLM_MODEL`). По умолчанию — `glm-5.2`.
 
-## Sandbox-контейнер
 
-Изолированная среда для тестов и отладки. Не запускается автоматически
-(`restart: no`), запускается вручную: `docker compose up -d sandbox`.
-
-Python 3.12, curl, jq, pytest, neo4j driver, requests. Код проекта
-монтируется через volumes (backend, frontend, parsers) — правки видны
-без пересборки. Доступ к Neo4j и GraphRAG API изнутри контейнера.
-
-Использование: `docker exec anime-sandbox <cmd>`.
