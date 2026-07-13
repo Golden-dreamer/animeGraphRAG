@@ -1,4 +1,6 @@
 .env
+.hermes.md
+.DS_Store
 parsers/cache/
 parsers/data/
 parsers/bootstrap_progress.txt
@@ -6,5 +8,3 @@ backend/__pycache__/
 backend/data/
 __pycache__/
 *.pyc
-.DS_Store
-.*
