@@ -3,6 +3,26 @@
 Формат: дата — что изменилось и почему. Ведётся вручную, по мере значимых
 архитектурных решений (не каждый мелкий коммит).
 
+## 2026-07-14 (v14) — tests + refactoring
+
+**Тесты:** 98 тестов покрывают основной функционал. Инфраструктура:
+`pytest.ini`, `requirements-dev.txt`, `tests/conftest.py` (sys.path к
+`backend/` и `parsers/`). Тесты запускаются в песочнице (hermes-sandbox).
+
+Покрытие:
+- `mal_seasons`: current_season, shift_season, all_seasons (12 тестов)
+- `parser`: _derive_year_season, extract_fields (16 тестов)
+- `mal_scraper`: утилиты, extract_slug, parse_season/anime/characters (30 тестов)
+- `graphrag`: _extract_cypher, ask() с моками LLM+Neo4j (10 тестов)
+- `db`: миграция, CRUD чатов, сообщения, логи (12 тестов)
+- `main`: health, metrics, endpoints, ask с моками (9 тестов)
+
+**Рефакторинг:** функции разбиты на < 45 строк, без изменения поведения.
+- `graphrag.py`: `ask()` 170 → 40 строк. Извлечены 11 helper-функций.
+- `main.py`: `api_ask` и метрики разбиты, `_STATUS_METRIC_MAP` заменяет if/elif.
+- `mal_scraper.py`: `parse_anime_page` 85 → 20 строк, `_parse_characters`
+  100+ → 10 строк. Извлечены 15 helper-функций.
+
 ## 2026-07-14 (v13) — enriched logging, logs page, Prometheus metrics
 
 **Проблема:** логи Cypher-запросов (query_logs в SQLite) содержали только
