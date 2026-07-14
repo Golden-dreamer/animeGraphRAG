@@ -1,8 +1,40 @@
-# Anime GraphRAG — парсер MyAnimeList
+# Anime GraphRAG
 
-Парсер MyAnimeList (HTML-скрапинг) с загрузкой в графовую БД Neo4j.
+Парсер [MyAnimeList](https://myanimelist.net) (HTML-скрапинг) с загрузкой в
+графовую БД Neo4j и веб-интерфейсом для запросов на естественном языке.
+
 Scheduler актуализирует текущий, следующий и прошлый сезоны.
 Bootstrap проходится по архиву с 1917 года.
+
+212K+ узлов, 899K+ связей — аниме, студии, жанры, персонажи, сэйю, режиссёры.
+
+## Как это выглядит
+
+**GraphRAG UI** — чат с запросами на естественном языке:
+
+![GraphRAG UI](docs/img/graphrag-chat.png)
+
+**Neo4j Browser** — визуализация графа:
+
+![Neo4j Graph](docs/img/neo4j-graph.png)
+
+## Примеры вопросов
+
+GraphRAG UI принимает вопросы на русском, генерирует Cypher-запрос к Neo4j
+и формулирует ответ. Примеры:
+
+- Кто режиссёр Fullmetal Alchemist: Brotherhood и что он ещё снимал?
+- Топ-10 аниме студии Kyoto Animation по оценкам
+- Какие жанры у One Piece?
+- Сэйю с наибольшим числом ролей
+- Какие аниме вышли весной 2024 года?
+- Кто озвучивал Гоку?
+- Студии с самым высоким средним score
+- Какие аниме в жанрах Action и Comedy одновременно?
+- Где смотреть Demon Slayer (стриминг)?
+- Все персонажи Evangelion
+
+Подробнее — [`docs/popular_cypher_commands.md`](docs/popular_cypher_commands.md).
 
 ## Запуск
 
@@ -14,12 +46,13 @@ Bootstrap проходится по архиву с 1917 года.
    ```
 
 3. Проверьте:
-   - Neo4j Browser: `http://<IP>:7474` (логин `neo4j`, пароль из `.env`)
-   - FastAPI: `http://<IP>:8567/docs`
+   - **Neo4j Browser:** `http://localhost:7474` (логин `neo4j`, пароль из `.env`)
+   - **FastAPI:** `http://localhost:8567/docs`
+   - **GraphRAG UI:** `http://localhost:8666`
 
-Scheduler запускается автоматически при старте контейнера. По умолчанию —
-раз в сутки (настраивается через `cycle_interval_sec`). Лимиты MyAnimeList
-(0.5s между запросами, 55 req/мин) соблюдаются внутри `fetcher.py`.
+Scheduler запускается автоматически. По умолчанию раз в сутки
+(настраивается через `cycle_interval_sec`). Лимиты MyAnimeList
+(0.5s между запросами, 55 req/мин) соблюдаются автоматически.
 
 ## Первичное наполнение архива (опционально, разово)
 
@@ -30,39 +63,10 @@ scheduler):
 docker compose run --rm parsers python bootstrap.py
 ```
 
-Прогресс сохраняется в Neo4j (`title IS NULL` у необработанных
-тайтлов) и в файле `parsers/bootstrap_progress.txt` (последний обработанный
-сезон). При прерывании — просто запустите заново, продолжит с места
-остановки. Лимиты — ~27 тайтлов/мин (два запроса
-на тайтл: основная страница + characters/staff).
-
-Подробнее — [`docs/operations.md`](docs/operations.md).
-
-## Дополнение staff
-
-Если база наполнялась до исправления URL `/characters` (v5), staff у
-большинства аниме неполный (2-4 человека вместо полного списка):
-
-```bash
-docker compose run --rm parsers python update_staff.py
-docker compose run --rm parsers python update_staff.py --limit 100
-```
-
-Скрипт проходит все аниме с <=4 staff в Neo4j, заново фетчит `/characters`
-с правильным URL и обновляет связи. MERGE предотвращает дубли.
-
-## Дополнение пропущенных тайтлов
-
-Сверить сезонные страницы с БД и добавить недостающие:
-
-```bash
-docker compose run --rm parsers python check_missing.py          # актуальные сезоны
-docker compose run --rm parsers python check_missing.py --all    # все сезоны (1917→)
-docker compose run --rm parsers python check_missing.py --season 2006 summer
-```
-
-Недостающие тайтлы регистрируются как stub'ы (`title IS NULL`), scheduler
-обработает их при следующем цикле.
+Прогресс сохраняется в Neo4j (`title IS NULL` у необработанных тайтлов)
+и в файле `parsers/bootstrap_progress.txt`. При прерывании — просто
+запустите заново, продолжит с места остановки. Лимиты — ~27 тайтлов/мин
+(два запроса на тайтл: основная страница + characters/staff).
 
 ## Управление через API
 
@@ -83,53 +87,59 @@ curl -X POST http://localhost:8567/trigger-cycle
 curl -X PUT http://localhost:8567/schedule \
   -H "Content-Type: application/json" \
   -d '{"cycle_interval_sec": 3600}'
-
-# Текущая конфигурация
-curl http://localhost:8567/config
 ```
 
 Полный список эндпоинтов — [`docs/configuration.md`](docs/configuration.md).
 
+## Утилитные скрипты
+
+```bash
+# Дополнить staff для аниме с <=4 записями
+docker compose run --rm parsers python update_staff.py
+
+# Сверить сезонные страницы с БД и добавить недостающие
+docker compose run --rm parsers python check_missing.py          # актуальные сезоны
+docker compose run --rm parsers python check_missing.py --all    # все сезоны (1917→)
+```
+
 ## Архитектура
 
 ```
-parsers/
-  app.py             — FastAPI + фоновый цикл scheduler'а
-  scheduler_logic.py — один цикл: discover + обработка due-очереди
-  discover.py        — регистрация тайтлов 3 актуальных сезонов в графе
-  graph_state.py     — очередь/state в Neo4j (stub'ы, due-выборка, сезоны)
-  processing.py      — обработка одного тайтла (общая для scheduler и bootstrap)
-  fetcher.py         — HTTP к MyAnimeList + рейт-лимит + ретраи
-  mal_scraper.py     — парсер HTML: сезон, страница аниме, characters/staff
-  parser.py          — нормализация данных из scraper для loader
-  loader.py          — запись в Neo4j (Cypher MERGE)
-  mal_seasons.py     — утилиты сезонов: current, shift, all_seasons
-  config.py          — загрузка config.yaml + env-переменных
-  bootstrap.py       — ручной прогон архива (1917→)
-  update_staff.py    — ручной: дополнение staff для аниме с <=4 записями
-  check_missing.py   — ручной: сверка MAL ↔ Neo4j, добавление недостающих
-  config.yaml        — параметры (правится без пересборки образа)
+parsers/                                      backend/
+  app.py             — FastAPI + scheduler     main.py      — FastAPI, раздаёт UI
+  scheduler_logic.py — один цикл               graphrag.py  — question → Cypher → answer
+  discover.py        — регистрация сезонов      db.py        — SQLite: чаты, логи
+  processing.py      — обработка одного тайтла
+  fetcher.py         — HTTP к MAL + рейт-лимит  frontend/
+  mal_scraper.py     — парсер HTML                index.html  — ChatGPT-like UI
+  parser.py          — нормализация               style.css
+  loader.py          — запись в Neo4j             app.js
+  graph_state.py     — очередь/state в Neo4j
+  config.py          — config.yaml + env        Neo4j
+  bootstrap.py       — ручной прогон архива       граф: Anime, Genre, Studio, Producer,
+  update_staff.py    — дополнение staff                  Person, Character, ExternalLink,
+  check_missing.py   — сверка с MAL                       StreamingPlatform, Manga
+  config.yaml        — параметры
 ```
 
 Подробнее — [`docs/architecture.md`](docs/architecture.md).
-Модель данных — [`docs/data-model.md`](docs/data-model.md).
-Эксплуатация — [`docs/operations.md`](docs/operations.md).
-Конфигурация — [`docs/configuration.md`](docs/configuration.md).
-Changelog — [`docs/changelog.md`](docs/changelog.md).
-Cypher-запросы — [`docs/popular_cypher_commands.md`](docs/popular_cypher_commands.md).
 
-## GraphRAG UI
+## Документация
 
-Веб-интерфейс для запросов к графу на естественном языке (порт 8666):
+| Файл | Что описывает |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | Архитектура, поток данных, модули |
+| [`docs/data-model.md`](docs/data-model.md) | Узлы, связи, индексы Neo4j |
+| [`docs/operations.md`](docs/operations.md) | Эксплуатация, мониторинг, ошибки |
+| [`docs/configuration.md`](docs/configuration.md) | Конфигурация, API-эндпоинты |
+| [`docs/popular_cypher_commands.md`](docs/popular_cypher_commands.md) | 20 примеров Cypher-запросов |
+| [`docs/changelog.md`](docs/changelog.md) | Журнал изменений |
 
-```bash
-docker compose up -d graphrag
-```
+## Технологии
 
-URL: `http://localhost:8666`
-
-Пайплайн: вопрос → LLM генерирует Cypher-запрос → Neo4j → LLM формулирует
-ответ на русском. Cypher показывается в интерфейсе (раскрывающийся блок).
-Модель LLM настраивается через `.env` (`GRAPHRAG_LLM_MODEL`, по умолчанию
-`glm-5.2`). Подробнее — [`docs/architecture.md`](docs/architecture.md)
-и [`docs/operations.md`](docs/operations.md).
+- **Neo4j 5** — графовая БД
+- **FastAPI** — API парсера и GraphRAG бэкенд
+- **Docker Compose** — оркестрация (3 контейнера: neo4j, parsers, graphrag)
+- **BeautifulSoup** — HTML-скрапинг MyAnimeList
+- **OpenAI-compatible LLM** — text-to-Cypher пайплайн (по умолчанию `glm-5.2`)
+- **SQLite** — хранение чатов и логов GraphRAG
