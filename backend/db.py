@@ -40,12 +40,28 @@ def init_db():
             rows_returned INTEGER,
             error_message TEXT,
             attempts INTEGER,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            model TEXT,
+            llm_base_url TEXT,
+            answer TEXT,
+            duration_sec REAL,
+            cypher_raw TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
         CREATE INDEX IF NOT EXISTS idx_logs_chat ON query_logs(chat_id);
     """)
+    # Миграция: добавляем новые колонки, если таблица уже существует без них
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(query_logs)").fetchall()}
+    for col, decl in [
+        ("model", "TEXT"),
+        ("llm_base_url", "TEXT"),
+        ("answer", "TEXT"),
+        ("duration_sec", "REAL"),
+        ("cypher_raw", "TEXT"),
+    ]:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE query_logs ADD COLUMN {col} {decl}")
     conn.commit()
     conn.close()
 
@@ -111,14 +127,17 @@ def get_messages(chat_id: str, limit: int = 50) -> list[dict]:
 # --- Логи ---
 
 def log_query(chat_id: str, question: str, cypher: str, status: str,
-              rows_returned: int = 0, error_message: str = None, attempts: int = 1):
+              rows_returned: int = 0, error_message: str|None = None, attempts: int = 1,
+              model: str|None = None, llm_base_url: str|None = None, answer: str|None = None,
+              duration_sec: float|None = None, cypher_raw: str|None = None):
     conn = _connect()
     conn.execute(
         """INSERT INTO query_logs
-           (chat_id, question, cypher, status, rows_returned, error_message, attempts, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           (chat_id, question, cypher, status, rows_returned, error_message, attempts,
+            created_at, model, llm_base_url, answer, duration_sec, cypher_raw)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (chat_id, question, cypher, status, rows_returned, error_message, attempts,
-         datetime.utcnow().isoformat())
+         datetime.utcnow().isoformat(), model, llm_base_url, answer, duration_sec, cypher_raw)
     )
     conn.commit()
     conn.close()
@@ -127,8 +146,9 @@ def log_query(chat_id: str, question: str, cypher: str, status: str,
 def get_logs(limit: int = 100) -> list[dict]:
     conn = _connect()
     rows = conn.execute(
-        """SELECT chat_id, question, cypher, status, rows_returned,
-                  error_message, attempts, created_at
+        """SELECT id, chat_id, question, cypher, status, rows_returned,
+                  error_message, attempts, created_at,
+                  model, llm_base_url, answer, duration_sec, cypher_raw
            FROM query_logs ORDER BY id DESC LIMIT ?""",
         (limit,)
     ).fetchall()

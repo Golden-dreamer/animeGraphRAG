@@ -182,8 +182,12 @@ def _run_cypher(cypher: str) -> tuple[list[dict] | None, str | None]:
 def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
     """Полный пайплайн: question → Cypher → Neo4j → answer.
 
-    Возвращает: {answer, cypher, status, rows, attempts, error}
+    Возвращает: {answer, cypher, status, rows, attempts, error, model,
+                 llm_base_url, duration_sec, cypher_raw}
     """
+    import time
+    t0 = time.time()
+
     # Шаг 1: генерируем Cypher
     history_context = ""
     if history:
@@ -197,6 +201,7 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
     error = None
     rows = None
     attempts = 0
+    raw = None
 
     for attempt in range(1, MAX_CYHPER_ATTEMPTS + 1):
         attempts = attempt
@@ -218,6 +223,10 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
                 "rows": 0,
                 "attempts": attempts,
                 "error": str(e),
+                "model": LLM_MODEL,
+                "llm_base_url": LLM_BASE_URL,
+                "duration_sec": round(time.time() - t0, 2),
+                "cypher_raw": None,
             }
 
         cypher = _extract_cypher(raw)
@@ -226,7 +235,10 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
         if not cypher.strip() or cypher.upper().strip() == "INVALID":
             log.info("LLM returned empty/INVALID for this question")
             if chat_id:
-                db.log_query(chat_id, question, cypher or "(empty)", "invalid", 0, None, attempts)
+                db.log_query(chat_id, question, cypher or "(empty)", "invalid", 0, None, attempts,
+                              model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
+                              answer="Не нашёл информации по этому запросу.",
+                              duration_sec=round(time.time() - t0, 2), cypher_raw=raw)
             return {
                 "answer": "Не нашёл информации по этому запросу. Я могу отвечать на вопросы о тайтлах, студиях, жанрах, персонажах, сэйю, режиссёрах и связях между ними.",
                 "cypher": cypher or "(empty)",
@@ -234,6 +246,10 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
                 "rows": 0,
                 "attempts": attempts,
                 "error": None,
+                "model": LLM_MODEL,
+                "llm_base_url": LLM_BASE_URL,
+                "duration_sec": round(time.time() - t0, 2),
+                "cypher_raw": raw,
             }
 
         # CLARIFY — модели не хватает данных для точного запроса
@@ -241,7 +257,10 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
             clarify_question = cypher.strip()[len("CLARIFY:"):].strip()
             log.info("LLM requested clarification: %s", clarify_question)
             if chat_id:
-                db.log_query(chat_id, question, cypher, "clarify", 0, None, attempts)
+                db.log_query(chat_id, question, cypher, "clarify", 0, None, attempts,
+                              model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
+                              answer=clarify_question,
+                              duration_sec=round(time.time() - t0, 2), cypher_raw=raw)
             return {
                 "answer": clarify_question,
                 "cypher": cypher,
@@ -249,6 +268,10 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
                 "rows": 0,
                 "attempts": attempts,
                 "error": None,
+                "model": LLM_MODEL,
+                "llm_base_url": LLM_BASE_URL,
+                "duration_sec": round(time.time() - t0, 2),
+                "cypher_raw": raw,
             }
 
         # Шаг 2: выполняем в Neo4j
@@ -262,10 +285,6 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
                 status = "empty"
             else:
                 status = "ok"
-
-            # Логируем
-            if chat_id:
-                db.log_query(chat_id, question, cypher, status, row_count, None, attempts)
 
             # Шаг 3: формулируем ответ
             if row_count == 0:
@@ -287,6 +306,13 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
                     log.error("Answer LLM call failed: %s", e)
                     answer = f"Запрос выполнен ({row_count} строк), но не удалось сформулировать ответ: {e}"
 
+            # Логируем (с ответом)
+            if chat_id:
+                db.log_query(chat_id, question, cypher, status, row_count, None, attempts,
+                              model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
+                              answer=answer,
+                              duration_sec=round(time.time() - t0, 2), cypher_raw=raw)
+
             return {
                 "answer": answer,
                 "cypher": cypher,
@@ -294,6 +320,10 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
                 "rows": row_count,
                 "attempts": attempts,
                 "error": None,
+                "model": LLM_MODEL,
+                "llm_base_url": LLM_BASE_URL,
+                "duration_sec": round(time.time() - t0, 2),
+                "cypher_raw": raw,
             }
         else:
             log.warning("Cypher error (attempt %d): %s", attempt, error[:200])
@@ -301,7 +331,10 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
 
     # Все попытки исчерпаны
     if chat_id:
-        db.log_query(chat_id, question, cypher or "", "error", 0, error, attempts)
+        db.log_query(chat_id, question, cypher or "", "error", 0, error, attempts,
+                      model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
+                      answer=f"Не удалось выполнить запрос к базе после {attempts} попыток. Последняя ошибка: {error}",
+                      duration_sec=round(time.time() - t0, 2), cypher_raw=raw if 'raw' in dir() else None)
 
     return {
         "answer": f"Не удалось выполнить запрос к базе после {attempts} попыток. Последняя ошибка: {error}",
@@ -310,4 +343,8 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
         "rows": 0,
         "attempts": attempts,
         "error": error,
+        "model": LLM_MODEL,
+        "llm_base_url": LLM_BASE_URL,
+        "duration_sec": round(time.time() - t0, 2),
+        "cypher_raw": raw if 'raw' in dir() else None,
     }
