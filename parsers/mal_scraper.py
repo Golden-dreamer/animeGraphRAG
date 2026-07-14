@@ -109,85 +109,79 @@ def parse_anime_page(html: str) -> dict | None:
     """
     soup = BeautifulSoup(html, 'html.parser')
 
-    # Проверка, что это страница аниме
-    title_tag = soup.select_one('h1.title-name')
-    if not title_tag:
+    if not _is_anime_page(soup):
         return None
 
     result = {}
-
-    # --- Базовые поля ---
-    og_url_tag = soup.select_one('meta[property="og:url"]')
-    og_url = og_url_tag.get('content', '') if og_url_tag else ''
-    result['mal_id'] = _extract_id_from_url(og_url or _find_canonical_url(soup))
-    # Fallback: ищем ID вCanonical
-    if result['mal_id'] is None:
-        link = soup.select_one('a[href*="/anime/"]')
-        if link:
-            result['mal_id'] = _extract_id_from_url(link.get('href', ''))
-
-    result['title_original'] = _clean(title_tag.get_text())
-    title_english_tag = soup.select_one('p.title-english')
-    result['title_english'] = _clean(title_english_tag.get_text()) if title_english_tag else None
-
-    # --- Poster ---
-    poster_tag = soup.select_one('div.leftside img[itemprop="image"]')
-    if poster_tag:
-        result['poster_url'] = poster_tag.get('data-src') or poster_tag.get('src')
-    else:
-        result['poster_url'] = None
-
-    # --- Alternative Titles ---
+    result['mal_id'] = _extract_mal_id(soup)
+    result['title_original'] = _extract_title_original(soup)
+    result['title_english'] = _extract_title_english(soup)
+    result['poster_url'] = _extract_poster(soup)
     result['title_synonyms'] = _parse_alt_titles(soup, 'Synonyms')
     result['title_japanese'] = _parse_alt_titles(soup, 'Japanese')
     result['title_english_official'] = _parse_alt_titles(soup, 'English')
-
-    # --- Information ---
     result.update(_parse_information(soup))
-
-    # --- Statistics ---
     result.update(_parse_statistics(soup))
-
-    # --- Synopsis ---
-    synopsis_tag = soup.select_one('p[itemprop="description"]')
-    result['synopsis'] = _clean(synopsis_tag.get_text()) if synopsis_tag else None
-
-    # --- Background ---
-    bg_header = soup.find('h2', id='background')
-    if bg_header:
-        # h2 внутри div. Текст background — в следующем элементе-брате этого div
-        parent_div = bg_header.parent
-        next_el = parent_div.find_next_sibling() if parent_div else None
-        if next_el and next_el.name in ('i', 'p', 'div'):
-            result['background'] = _clean(next_el.get_text())
-        elif next_el:
-            result['background'] = _clean(next_el.get_text())
-        else:
-            result['background'] = None
-    else:
-        result['background'] = None
-
-    # --- Related Entries ---
+    result['synopsis'] = _extract_synopsis(soup)
+    result['background'] = _extract_background(soup)
     result['related'] = _parse_related_entries(soup)
-
-    # --- Available At (official links) ---
     result['available_at'] = _parse_external_links(soup, 'Available At')
-
-    # --- Resources ---
     result['resources'] = _parse_external_links(soup, 'Resources')
+    _add_mal_url_to_resources(soup, result)
+    result['streaming_platforms'] = _parse_streaming_platforms(soup)
+    return result
 
-    # Добавляем ссылку на саму страницу MAL в resources
+
+def _is_anime_page(soup: BeautifulSoup) -> bool:
+    """Проверяет, что HTML — страница аниме (наличие h1.title-name)."""
+    return soup.select_one('h1.title-name') is not None
+
+
+def _extract_mal_id(soup: BeautifulSoup) -> int | None:
+    """Извлекает mal_id из og:url или canonical."""
+    og_url_tag = soup.select_one('meta[property="og:url"]')
+    og_url = og_url_tag.get('content', '') if og_url_tag else ''
+    mal_id = _extract_id_from_url(og_url or _find_canonical_url(soup))
+    if mal_id is not None:
+        return mal_id
+    # Fallback: первая ссылка на /anime/
+    link = soup.select_one('a[href*="/anime/"]')
+    return _extract_id_from_url(link.get('href', '')) if link else None
+
+
+def _extract_title_original(soup: BeautifulSoup) -> str | None:
+    return _clean(soup.select_one('h1.title-name').get_text())
+
+
+def _extract_title_english(soup: BeautifulSoup) -> str | None:
+    tag = soup.select_one('p.title-english')
+    return _clean(tag.get_text()) if tag else None
+
+
+def _extract_poster(soup: BeautifulSoup) -> str | None:
+    tag = soup.select_one('div.leftside img[itemprop="image"]')
+    return tag.get('data-src') or tag.get('src') if tag else None
+
+
+def _extract_synopsis(soup: BeautifulSoup) -> str | None:
+    tag = soup.select_one('p[itemprop="description"]')
+    return _clean(tag.get_text()) if tag else None
+
+
+def _extract_background(soup: BeautifulSoup) -> str | None:
+    """Парсит секцию Background — текст в элементе после h2#background."""
+    bg_header = soup.find('h2', id='background')
+    if not bg_header or not bg_header.parent:
+        return None
+    next_el = bg_header.parent.find_next_sibling()
+    return _clean(next_el.get_text()) if next_el else None
+
+
+def _add_mal_url_to_resources(soup: BeautifulSoup, result: dict):
+    """Добавляет ссылку на саму страницу MAL в начало resources."""
     mal_url = _find_canonical_url(soup)
     if mal_url:
-        result['resources'].insert(0, {
-            'url': mal_url,
-            'name': 'MyAnimeList',
-        })
-
-    # --- Streaming Platforms ---
-    result['streaming_platforms'] = _parse_streaming_platforms(soup)
-
-    return result
+        result['resources'].insert(0, {'url': mal_url, 'name': 'MyAnimeList'})
 
 
 def _find_canonical_url(soup: BeautifulSoup) -> str:
@@ -518,104 +512,113 @@ def _parse_characters(soup: BeautifulSoup) -> list[dict]:
       - Отдельная страница /characters: h3.h3_character_name (внутри <a>)
     """
     characters = []
-
-    # Ищем все h3 с именами персонажей (оба варианта)
-    h3s = soup.select('h3.h3_characters_voice_actors, h3.h3_character_name')
-
-    for h3 in h3s:
-        # Ссылка может быть внутри h3 или h3 внутри a
-        link = h3.find('a')
-        if not link:
-            # h3 itself might be inside an <a>
-            link = h3.find_parent('a')
-        if not link:
-            continue
-
-        url = link.get('href', '')
-        mal_id = _extract_id_from_url(url)
-        name = _clean(link.get_text())
-
-        if not mal_id or not name:
-            continue
-
-        # Роль (Main/Supporting) — ищем в ближайшем родительском td
-        parent_td = h3.find_parent('td')
-        role = None
-        if parent_td:
-            # На основной странице: <small>Main</small>
-            role_small = parent_td.select_one('small')
-            if role_small:
-                role = _clean(role_small.get_text())
-            if not role:
-                # На странице /characters: div.spaceit_pad без dark_text,
-                # второй div после имени содержит роль
-                divs = parent_td.select('div.spaceit_pad')
-                for d in divs:
-                    text = _clean(d.get_text())
-                    if text in ('Main', 'Supporting'):
-                        role = text
-                        break
-
-        # Voice actors — в соседнем td справа
-        va_list = []
-        va_td = None
-        if parent_td:
-            tr = parent_td.find_parent('tr')
-            if tr:
-                tds = tr.find_all('td')
-                for td in tds:
-                    if td is parent_td:
-                        continue
-                    if td.select_one('a[href*="/people/"]'):
-                        va_td = td
-                        break
-
-        if va_td:
-            # На отдельной странице /characters: VA в tr.js-anime-character-va-lang
-            va_rows = va_td.select('tr.js-anime-character-va-lang')
-            if not va_rows:
-                # На основной странице — один tr с VA
-                va_rows = va_td.select('tr')
-
-            for va_row in va_rows:
-                va_links = va_row.select('a[href*="/people/"]')
-                for va_link in va_links:
-                    va_url = va_link.get('href', '')
-                    va_id = _extract_id_from_url(va_url)
-                    va_name = _clean(va_link.get_text())
-                    if not va_id or not va_name:
-                        continue
-
-                    # Язык VA
-                    lang = None
-                    # На /characters: div.js-anime-character-language
-                    lang_div = va_row.select_one('div.js-anime-character-language')
-                    if lang_div:
-                        lang = _clean(lang_div.get_text())
-                    if not lang:
-                        # На основной странице: <small>Japanese</small>
-                        small = va_row.find('small')
-                        if small:
-                            lang = _clean(small.get_text())
-
-                    # Не дублируем VA
-                    if not any(v['mal_id'] == va_id for v in va_list):
-                        va_list.append({
-                            'mal_id': va_id,
-                            'name': va_name,
-                            'url': va_url,
-                            'language': lang,
-                        })
-
-        characters.append({
-            'mal_id': mal_id,
-            'name': name,
-            'url': url,
-            'role': role,
-            'voice_actors': va_list,
-        })
-
+    for h3 in soup.select('h3.h3_characters_voice_actors, h3.h3_character_name'):
+        char = _parse_single_character(h3)
+        if char:
+            characters.append(char)
     return characters
+
+
+def _parse_single_character(h3) -> dict | None:
+    """Парсит один персонаж из h3 заголовка. Возвращает None если невалиден."""
+    link = _find_char_link(h3)
+    if not link:
+        return None
+
+    url = link.get('href', '')
+    mal_id = _extract_id_from_url(url)
+    name = _clean(link.get_text())
+    if not mal_id or not name:
+        return None
+
+    parent_td = h3.find_parent('td')
+    role = _extract_char_role(parent_td)
+    voice_actors = _extract_voice_actors(parent_td)
+
+    return {
+        'mal_id': mal_id, 'name': name, 'url': url,
+        'role': role, 'voice_actors': voice_actors,
+    }
+
+
+def _find_char_link(h3) -> object | None:
+    """Находит ссылку на персонажа внутри h3 или его родителя."""
+    link = h3.find('a')
+    if not link:
+        link = h3.find_parent('a')
+    return link
+
+
+def _extract_char_role(parent_td) -> str | None:
+    """Извлекает роль персонажа (Main/Supporting) из родительского td."""
+    if not parent_td:
+        return None
+    small = parent_td.select_one('small')
+    if small:
+        return _clean(small.get_text())
+    # На /characters: role в div.spaceit_pad без dark_text
+    for d in parent_td.select('div.spaceit_pad'):
+        text = _clean(d.get_text())
+        if text in ('Main', 'Supporting'):
+            return text
+    return None
+
+
+def _extract_voice_actors(parent_td) -> list[dict]:
+    """Извлекает список voice actors из соседнего td."""
+    if not parent_td:
+        return []
+    va_td = _find_va_td(parent_td)
+    if not va_td:
+        return []
+    return _parse_va_rows(va_td)
+
+
+def _find_va_td(parent_td):
+    """Находит td с voice actors в том же tr."""
+    tr = parent_td.find_parent('tr')
+    if not tr:
+        return None
+    for td in tr.find_all('td'):
+        if td is parent_td:
+            continue
+        if td.select_one('a[href*="/people/"]'):
+            return td
+    return None
+
+
+def _parse_va_rows(va_td) -> list[dict]:
+    """Парсит voice actor строки из td. Не дублирует VA по mal_id."""
+    va_list = []
+    va_rows = va_td.select('tr.js-anime-character-va-lang') or va_td.select('tr')
+    for va_row in va_rows:
+        for va_link in va_row.select('a[href*="/people/"]'):
+            va = _parse_single_va(va_link, va_row)
+            if va and not any(v['mal_id'] == va['mal_id'] for v in va_list):
+                va_list.append(va)
+    return va_list
+
+
+def _parse_single_va(va_link, va_row) -> dict | None:
+    """Парсит одного voice actor из ссылки."""
+    va_url = va_link.get('href', '')
+    va_id = _extract_id_from_url(va_url)
+    va_name = _clean(va_link.get_text())
+    if not va_id or not va_name:
+        return None
+    return {
+        'mal_id': va_id, 'name': va_name, 'url': va_url,
+        'language': _extract_va_language(va_row),
+    }
+
+
+def _extract_va_language(va_row) -> str | None:
+    """Извлекает язык озвучки из строки VA."""
+    lang_div = va_row.select_one('div.js-anime-character-language')
+    if lang_div:
+        return _clean(lang_div.get_text())
+    small = va_row.find('small')
+    return _clean(small.get_text()) if small else None
 
 
 def _parse_staff(soup: BeautifulSoup) -> list[dict]:
