@@ -3,6 +3,34 @@
 Формат: дата — что изменилось и почему. Ведётся вручную, по мере значимых
 архитектурных решений (не каждый мелкий коммит).
 
+## 2026-07-14 (v13) — enriched logging, logs page, Prometheus metrics
+
+**Проблема:** логи Cypher-запросов (query_logs в SQLite) содержали только
+question, cypher, status, rows, attempts — нельзя было определить, какая
+модель LLM отработала, какой URL использовался, сколько времени занял запрос,
+какой был сырой вывод LLM, какой был ответ. Просмотр логов — только через
+raw JSON в /api/logs.
+
+**Решения:**
+- `db.py`: миграция query_logs — добавлены колонки `model`, `llm_base_url`,
+  `answer`, `duration_sec`, `cypher_raw`. Автомиграция через ALTER TABLE
+  для существующих БД.
+- `graphrag.py`: `ask()` трекает `time.time()`, `raw` вывод LLM, `LLM_MODEL`,
+  `LLM_BASE_URL`. Все return-пути возвращают новые поля. `log_query()`
+  вызывается с полным набором (включая answer — ответ формулируется до
+  логирования, а не через UPDATE).
+- `main.py`: `/api/health` возвращает `model` + `llm_base_url`. `/api/ask`
+  ответ включает `model`, `llm_base_url`, `duration_sec`, `cypher_raw`.
+  `/metrics` — Prometheus text exposition format (counters: requests_total,
+  requests_ok/error/invalid/clarify, cypher_attempts_total, rows_returned_total;
+  summary: duration_sec).
+- `frontend/logs.html` + `logs.css` + `logs.js`: веб-страница логов
+  (`/logs`). Таблица: время, статус-бейдж, модель, вопрос, Cypher, ответ
+  (markdown), сырой вывод LLM, попытки, строки, длительность, chat ID.
+  Health bar сверху (model + URL + status dot). Stats cards (всего/ok/
+  empty/error/invalid/clarify/llm_error/avg duration/total rows). Фильтр
+  по статусу, выборка лимита, кнопка обновления.
+
 ## 2026-07-12 (v12) — CLARIFY, исправление LIMIT
 
 **Проблема:** LLM добавляла произвольный `LIMIT 5` к Cypher-запросам,

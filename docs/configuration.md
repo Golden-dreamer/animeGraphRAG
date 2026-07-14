@@ -98,9 +98,11 @@ curl -X POST http://localhost:8567/refresh/5249
 | DELETE | `/api/chats/{id}` | удалить чат |
 | PUT | `/api/chats/{id}` | переименовать чат |
 | GET | `/api/chats/{id}/messages` | сообщения чата |
-| POST | `/api/chats/{id}/ask` | вопрос к графу (`{"message": "..."}`) — возвращает `answer`, `cypher`, `status` (ok/empty/error/invalid/clarify), `rows`, `attempts` |
-| GET | `/api/logs?limit=50` | логи Cypher-запросов |
-| GET | `/api/health` | проверка живости + текущая модель LLM |
+| POST | `/api/chats/{id}/ask` | вопрос к графу (`{"message": "..."}`) — возвращает `answer`, `cypher`, `status` (ok/empty/error/invalid/clarify), `rows`, `attempts`, `model`, `llm_base_url`, `duration_sec`, `cypher_raw` |
+| GET | `/api/logs?limit=100` | логи Cypher-запросов (model, answer, duration_sec, cypher_raw) |
+| GET | `/api/health` | проверка живости + текущая модель LLM + llm_base_url |
+| GET | `/logs` | веб-страница логов (таблица с фильтром, статами) |
+| GET | `/metrics` | Prometheus-метрики (counters + duration summary) |
 
 ## Проверка индексов Neo4j
 
