@@ -1,0 +1,205 @@
+/* Logs page styles */
+
+.logs-page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.logs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.logs-title-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logs-title-group h1 {
+  font-size: 22px;
+  color: var(--accent);
+  margin: 0;
+}
+
+.back-link, .metrics-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 14px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: border-color 0.2s;
+}
+.back-link:hover, .metrics-link:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.logs-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.logs-controls select {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.refresh-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.refresh-btn:hover { opacity: 0.85; }
+
+.health-bar {
+  display: flex;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--bg-input);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+.health-bar .item { display: flex; gap: 6px; }
+.health-bar .item .val { color: var(--text); font-weight: 600; }
+.health-bar .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.dot-ok { background: #4caf50; }
+.dot-err { background: var(--accent); }
+
+.logs-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.stat-card {
+  padding: 8px 14px;
+  background: var(--bg-input);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.stat-card .num { color: var(--text); font-weight: 700; font-size: 16px; }
+
+.logs-table-wrap {
+  overflow-x: auto;
+}
+
+.logs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.logs-table th {
+  background: var(--bg-input);
+  color: var(--text);
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+}
+
+.logs-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  max-width: 320px;
+  word-break: break-word;
+}
+
+.logs-table tr:hover { background: rgba(255,255,255,0.02); }
+
+.logs-table .loading { text-align: center; color: var(--text-muted); padding: 20px; }
+
+/* Status badges */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge-ok { background: #1b5e20; color: #a5d6a7; }
+.badge-empty { background: #3e2723; color: #ffab91; }
+.badge-error { background: #b71c1c; color: #ef9a9a; }
+.badge-invalid { background: #3e2723; color: #ffab91; }
+.badge-clarify { background: #1a237e; color: #82b1ff; }
+.badge-llm_error { background: #4a148c; color: #ce93d8; }
+
+/* Expandable cells */
+.expandable {
+  cursor: pointer;
+  position: relative;
+}
+.expandable .truncated {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.expandable.expanded .truncated {
+  -webkit-line-clamp: unset;
+}
+.expandable .expand-hint {
+  font-size: 11px;
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+.cypher-code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+.answer-content {
+  line-height: 1.5;
+}
+.answer-content p { margin: 0 0 4px 0; }
+.answer-content ul, .answer-content ol { margin: 0 0 4px 0; padding-left: 16px; }
+.answer-content li { margin: 1px 0; }
+
+.raw-llm {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+.muted { color: var(--text-muted); }

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GraphRAG — Логи</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/logs.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="logs-page">
+    <div class="logs-header">
+      <div class="logs-title-group">
+        <a href="/" class="back-link">← Чат</a>
+        <h1>Логи запросов</h1>
+        <a href="/metrics" class="metrics-link" target="_blank">Prometheus /metrics</a>
+      </div>
+      <div class="logs-controls">
+        <label>
+          Лимит:
+          <select id="limitSelect">
+            <option value="50">50</option>
+            <option value="100" selected>100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+          </select>
+        </label>
+        <label>
+          Фильтр:
+          <select id="statusFilter">
+            <option value="">все</option>
+            <option value="ok">ok</option>
+            <option value="empty">empty</option>
+            <option value="error">error</option>
+            <option value="invalid">invalid</option>
+            <option value="clarify">clarify</option>
+            <option value="llm_error">llm_error</option>
+          </select>
+        </label>
+        <button id="refreshBtn" class="refresh-btn">↻ Обновить</button>
+      </div>
+    </div>
+
+    <div class="health-bar" id="healthBar"></div>
+
+    <div class="logs-stats" id="logsStats"></div>
+
+    <div class="logs-table-wrap">
+      <table class="logs-table" id="logsTable">
+        <thead>
+          <tr>
+            <th>Время</th>
+            <th>Статус</th>
+            <th>Модель</th>
+            <th>Вопрос</th>
+            <th>Cypher</th>
+            <th>Ответ</th>
+            <th>Сырой LLM</th>
+            <th>Попыток</th>
+            <th>Строк</th>
+            <th>Время (с)</th>
+            <th>Chat</th>
+          </tr>
+        </thead>
+        <tbody id="logsBody">
+          <tr><td colspan="11" class="loading">Загрузка…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <script src="/static/logs.js"></script>
+</body>
+</html>
