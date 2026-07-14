@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 
 import requests
 from neo4j import GraphDatabase
@@ -32,7 +33,7 @@ NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
 
-MAX_CYHPER_ATTEMPTS = 3
+MAX_CYPHER_ATTEMPTS = 3
 
 # --- Схема графа (для system prompt) ---
 
@@ -132,6 +133,10 @@ ANSWER_SYSTEM_PROMPT = """\
 """
 
 
+# --------------------------------------------------------------------------- #
+# Helpers: LLM calls, Cypher extraction, Neo4j execution                      #
+# --------------------------------------------------------------------------- #
+
 def _llm_call(system_prompt: str, user_content: str, max_tokens: int = 4096) -> str:
     """Вызов LLM через OpenAI-compatible API."""
     resp = requests.post(
@@ -152,13 +157,16 @@ def _llm_call(system_prompt: str, user_content: str, max_tokens: int = 4096) -> 
         timeout=60,
     )
     resp.raise_for_status()
-    data = resp.json()
+    return _extract_content(resp.json())
+
+
+def _extract_content(data: dict) -> str:
+    """Извлекает текст ответа из JSON ответа LLM API."""
     return data["choices"][0]["message"]["content"].strip()
 
 
 def _extract_cypher(text: str) -> str:
     """Извлекает Cypher из ответа LLM (убирает markdown-блоки если есть)."""
-    # Если LLM обернула в ```cypher ... ``` — извлекаем
     m = re.search(r'```(?:cypher)?\s*\n(.*?)\n```', text, re.DOTALL)
     if m:
         return m.group(1).strip()
@@ -170,14 +178,111 @@ def _run_cypher(cypher: str) -> tuple[list[dict] | None, str | None]:
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     try:
         with driver.session() as session:
-            result = session.run(cypher)
-            rows = [dict(r) for r in result]
-            return rows, None
+            return [dict(r) for r in session.run(cypher)], None
     except Exception as e:
         return None, str(e)
     finally:
         driver.close()
 
+
+# --------------------------------------------------------------------------- #
+# Helpers: result construction                                                 #
+# --------------------------------------------------------------------------- #
+
+def _make_result(answer, cypher, status, rows, attempts, error,
+                 t0, raw=None) -> dict:
+    """Создаёт единый dict результата с метаданными."""
+    return {
+        "answer": answer,
+        "cypher": cypher,
+        "status": status,
+        "rows": rows,
+        "attempts": attempts,
+        "error": error,
+        "model": LLM_MODEL,
+        "llm_base_url": LLM_BASE_URL,
+        "duration_sec": round(time.time() - t0, 2),
+        "cypher_raw": raw,
+    }
+
+
+def _is_invalid(cypher: str) -> bool:
+    """True если LLM вернул пустой ответ или INVALID."""
+    return not cypher.strip() or cypher.upper().strip() == "INVALID"
+
+
+def _is_clarify(cypher: str) -> bool:
+    """True если LLM запросил уточнение (CLARIFY: ...)."""
+    return cypher.strip().upper().startswith("CLARIFY:")
+
+
+def _clarify_question(cypher: str) -> str:
+    """Извлекает уточняющий вопрос из 'CLARIFY: <вопрос>'."""
+    return cypher.strip()[len("CLARIFY:"):].strip()
+
+
+def _build_history_context(history: list[dict]) -> str:
+    """Превращает историю чата в текстовый контекст для LLM."""
+    if not history:
+        return ""
+    lines = ["", "Предыдущий контекст разговора:"]
+    for m in history[-6:]:
+        role = "Пользователь" if m["role"] == "user" else "Ответ"
+        lines.append(f"{role}: {m['content'][:200]}")
+    return "\n".join(lines) + "\n"
+
+
+def _build_retry_message(question: str, error: str) -> str:
+    """Сообщение для повторной попытки Cypher после ошибки."""
+    return (f"Вопрос: {question}\n\n"
+            f"Предыдущая попытка Cypher упала с ошибкой:\n{error}\n\n"
+            "Исправь запрос и попробуй снова.")
+
+
+def _truncate_rows(rows: list[dict]) -> str:
+    """Ограничивает размер данных для LLM: 100 строк max."""
+    limited = rows[:100]
+    result_str = json.dumps(limited, ensure_ascii=False, default=str)
+    if len(rows) > 100:
+        result_str += f"\n... (показано 100 из {len(rows)} строк)"
+    return result_str
+
+
+def _formulate_answer(question: str, rows: list[dict]) -> str:
+    """Шаг 3: LLM формулирует ответ на русском из результатов Cypher."""
+    if not rows:
+        return "Не нашёл информации по этому запросу."
+    try:
+        return _llm_call(
+            ANSWER_SYSTEM_PROMPT,
+            f"Вопрос: {question}\n\n"
+            f"Результат запроса ({len(rows)} строк):\n{_truncate_rows(rows)}",
+            max_tokens=LLM_MAX_TOKENS,
+        )
+    except Exception as e:
+        log.error("Answer LLM call failed: %s", e)
+        return f"Запрос выполнен ({len(rows)} строк), но не удалось сформулировать ответ: {e}"
+
+
+# --------------------------------------------------------------------------- #
+# Helpers: logging                                                             #
+# --------------------------------------------------------------------------- #
+
+def _log_and_return(chat_id, question, cypher, status, rows, error, attempts,
+                    t0, raw, answer):
+    """Логирует запрос в SQLite и возвращает result dict."""
+    if chat_id:
+        db.log_query(chat_id, question, cypher, status, rows, error, attempts,
+                      model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
+                      answer=answer,
+                      duration_sec=round(time.time() - t0, 2),
+                      cypher_raw=raw)
+    return _make_result(answer, cypher, status, rows, attempts, error, t0, raw)
+
+
+# --------------------------------------------------------------------------- #
+# Main pipeline                                                                #
+# --------------------------------------------------------------------------- #
 
 def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
     """Полный пайплайн: question → Cypher → Neo4j → answer.
@@ -185,166 +290,66 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
     Возвращает: {answer, cypher, status, rows, attempts, error, model,
                  llm_base_url, duration_sec, cypher_raw}
     """
-    import time
     t0 = time.time()
-
-    # Шаг 1: генерируем Cypher
-    history_context = ""
-    if history:
-        last = history[-6:]  # последние 3 пары
-        history_context = "\n\nПредыдущий контекст разговора:\n"
-        for m in last:
-            role = "Пользователь" if m["role"] == "user" else "Ответ"
-            history_context += f"{role}: {m['content'][:200]}\n"
-
+    history_ctx = _build_history_context(history or [])
     cypher = None
-    error = None
-    rows = None
-    attempts = 0
     raw = None
+    error = None
 
-    for attempt in range(1, MAX_CYHPER_ATTEMPTS + 1):
-        attempts = attempt
-        if attempt == 1:
-            user_msg = f"Вопрос: {question}{history_context}"
-        else:
-            user_msg = f"Вопрос: {question}\n\nПредыдущая попытка Cypher упала с ошибкой:\n{error}\n\nИсправь запрос и попробуй снова."
+    for attempt in range(1, MAX_CYPHER_ATTEMPTS + 1):
+        log.info("Cypher attempt %d/%d for: %s", attempt, MAX_CYPHER_ATTEMPTS, question[:80])
 
-        log.info("Cypher attempt %d/%d for: %s", attempt, MAX_CYHPER_ATTEMPTS, question[:80])
-
+        user_msg = _build_user_message(question, history_ctx, error, attempt)
         try:
             raw = _llm_call(CYPHER_SYSTEM_PROMPT, user_msg, max_tokens=2048)
         except Exception as e:
             log.error("LLM call failed: %s", e)
-            return {
-                "answer": f"Ошибка при обращении к LLM: {e}",
-                "cypher": None,
-                "status": "llm_error",
-                "rows": 0,
-                "attempts": attempts,
-                "error": str(e),
-                "model": LLM_MODEL,
-                "llm_base_url": LLM_BASE_URL,
-                "duration_sec": round(time.time() - t0, 2),
-                "cypher_raw": None,
-            }
+            return _make_result(
+                f"Ошибка при обращении к LLM: {e}", None, "llm_error",
+                0, attempt, str(e), t0)
 
         cypher = _extract_cypher(raw)
 
-        # Пустой ответ или INVALID — вопрос не подходит для графа
-        if not cypher.strip() or cypher.upper().strip() == "INVALID":
+        if _is_invalid(cypher):
             log.info("LLM returned empty/INVALID for this question")
-            if chat_id:
-                db.log_query(chat_id, question, cypher or "(empty)", "invalid", 0, None, attempts,
-                              model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
-                              answer="Не нашёл информации по этому запросу.",
-                              duration_sec=round(time.time() - t0, 2), cypher_raw=raw)
-            return {
-                "answer": "Не нашёл информации по этому запросу. Я могу отвечать на вопросы о тайтлах, студиях, жанрах, персонажах, сэйю, режиссёрах и связях между ними.",
-                "cypher": cypher or "(empty)",
-                "status": "invalid",
-                "rows": 0,
-                "attempts": attempts,
-                "error": None,
-                "model": LLM_MODEL,
-                "llm_base_url": LLM_BASE_URL,
-                "duration_sec": round(time.time() - t0, 2),
-                "cypher_raw": raw,
-            }
+            return _log_and_return(
+                chat_id, question, cypher or "(empty)", "invalid",
+                0, None, attempt, t0, raw,
+                "Не нашёл информации по этому запросу. Я могу отвечать на вопросы "
+                "о тайтлах, студиях, жанрах, персонажах, сэйю, режиссёрах и связях между ними.")
 
-        # CLARIFY — модели не хватает данных для точного запроса
-        if cypher.strip().upper().startswith("CLARIFY:"):
-            clarify_question = cypher.strip()[len("CLARIFY:"):].strip()
-            log.info("LLM requested clarification: %s", clarify_question)
-            if chat_id:
-                db.log_query(chat_id, question, cypher, "clarify", 0, None, attempts,
-                              model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
-                              answer=clarify_question,
-                              duration_sec=round(time.time() - t0, 2), cypher_raw=raw)
-            return {
-                "answer": clarify_question,
-                "cypher": cypher,
-                "status": "clarify",
-                "rows": 0,
-                "attempts": attempts,
-                "error": None,
-                "model": LLM_MODEL,
-                "llm_base_url": LLM_BASE_URL,
-                "duration_sec": round(time.time() - t0, 2),
-                "cypher_raw": raw,
-            }
+        if _is_clarify(cypher):
+            clarify = _clarify_question(cypher)
+            log.info("LLM requested clarification: %s", clarify)
+            return _log_and_return(
+                chat_id, question, cypher, "clarify",
+                0, None, attempt, t0, raw, clarify)
 
-        # Шаг 2: выполняем в Neo4j
         rows, error = _run_cypher(cypher)
-
-        if error is None:
-            row_count = len(rows) if rows else 0
-            log.info("Cypher OK, %d rows returned", row_count)
-
-            if row_count == 0:
-                status = "empty"
-            else:
-                status = "ok"
-
-            # Шаг 3: формулируем ответ
-            if row_count == 0:
-                answer = "Не нашёл информации по этому запросу."
-            else:
-                # Ограничиваем размер данных для LLM
-                rows_limited = rows[:100]
-                result_str = json.dumps(rows_limited, ensure_ascii=False, default=str)
-                if len(rows) > 100:
-                    result_str += f"\n... (показано 100 из {len(rows)} строк)"
-
-                try:
-                    answer = _llm_call(
-                        ANSWER_SYSTEM_PROMPT,
-                        f"Вопрос: {question}\n\nРезультат запроса ({row_count} строк):\n{result_str}",
-                        max_tokens=LLM_MAX_TOKENS,
-                    )
-                except Exception as e:
-                    log.error("Answer LLM call failed: %s", e)
-                    answer = f"Запрос выполнен ({row_count} строк), но не удалось сформулировать ответ: {e}"
-
-            # Логируем (с ответом)
-            if chat_id:
-                db.log_query(chat_id, question, cypher, status, row_count, None, attempts,
-                              model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
-                              answer=answer,
-                              duration_sec=round(time.time() - t0, 2), cypher_raw=raw)
-
-            return {
-                "answer": answer,
-                "cypher": cypher,
-                "status": status,
-                "rows": row_count,
-                "attempts": attempts,
-                "error": None,
-                "model": LLM_MODEL,
-                "llm_base_url": LLM_BASE_URL,
-                "duration_sec": round(time.time() - t0, 2),
-                "cypher_raw": raw,
-            }
-        else:
+        if error is not None:
             log.warning("Cypher error (attempt %d): %s", attempt, error[:200])
-            # Пробуем снова
+            continue
+
+        # Cypher выполнен успешно
+        safe_rows = rows or []
+        row_count = len(safe_rows)
+        status = "ok" if row_count else "empty"
+        log.info("Cypher OK, %d rows returned", row_count)
+        answer = _formulate_answer(question, safe_rows)
+        return _log_and_return(
+            chat_id, question, cypher, status, row_count, None, attempt, t0, raw, answer)
 
     # Все попытки исчерпаны
-    if chat_id:
-        db.log_query(chat_id, question, cypher or "", "error", 0, error, attempts,
-                      model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
-                      answer=f"Не удалось выполнить запрос к базе после {attempts} попыток. Последняя ошибка: {error}",
-                      duration_sec=round(time.time() - t0, 2), cypher_raw=raw if 'raw' in dir() else None)
+    error_answer = (f"Не удалось выполнить запрос к базе после "
+                    f"{MAX_CYPHER_ATTEMPTS} попыток. Последняя ошибка: {error}")
+    return _log_and_return(
+        chat_id, question, cypher or "", "error", 0, error,
+        MAX_CYPHER_ATTEMPTS, t0, raw, error_answer)
 
-    return {
-        "answer": f"Не удалось выполнить запрос к базе после {attempts} попыток. Последняя ошибка: {error}",
-        "cypher": cypher,
-        "status": "error",
-        "rows": 0,
-        "attempts": attempts,
-        "error": error,
-        "model": LLM_MODEL,
-        "llm_base_url": LLM_BASE_URL,
-        "duration_sec": round(time.time() - t0, 2),
-        "cypher_raw": raw if 'raw' in dir() else None,
-    }
+
+def _build_user_message(question: str, history_ctx: str,
+                        error: str | None, attempt: int) -> str:
+    """Собирает сообщение для LLM в зависимости от номера попытки."""
+    if attempt == 1:
+        return f"Вопрос: {question}{history_ctx}"
+    return _build_retry_message(question, error)
