@@ -4,6 +4,10 @@
   max-width: 1400px;
   margin: 0 auto;
   padding: 20px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .logs-header {
@@ -110,7 +114,8 @@
 .stat-card .num { color: var(--text); font-weight: 700; font-size: 16px; }
 
 .logs-table-wrap {
-  overflow-x: auto;
+  flex: 1;
+  overflow: auto;
 }
 
 .logs-table {

@@ -111,6 +111,15 @@ body {
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden;
+}
+
+/* Chat view — must be flex container for messages scroll */
+.chat-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -133,6 +142,35 @@ body {
   font-size: 16px;
   font-weight: 500;
 }
+
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Think toggle button — compact, inline like deepseek */
+.think-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 16px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.think-btn:hover { border-color: var(--text-muted); }
+.think-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(233, 69, 96, 0.1);
+}
+.think-label { font-weight: 500; }
 
 .messages {
   flex: 1;
@@ -333,4 +371,170 @@ body {
   .sidebar { position: absolute; z-index: 10; height: 100%; }
   .sidebar.hidden { transform: translateX(-260px); }
   .msg-user { margin-left: 0; }
+}
+
+/* Gear button + settings */
+.gear-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  transition: color 0.2s;
+}
+.gear-btn:hover { color: var(--accent); }
+
+.settings-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.back-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  max-width: 700px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.settings-section {
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-section label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setting-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.muted { color: var(--text-muted); font-weight: normal; font-size: 12px; }
+
+.settings-section input,
+.settings-section textarea {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.settings-section input:focus,
+.settings-section textarea:focus { border-color: var(--accent); }
+.settings-section textarea {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.toggle-row {
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Toggle switch */
+.switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--border);
+  border-radius: 24px;
+  transition: 0.3s;
+}
+.slider:before {
+  content: "";
+  position: absolute;
+  height: 18px; width: 18px;
+  left: 3px; bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: 0.3s;
+}
+.switch input:checked + .slider { background: var(--accent); }
+.switch input:checked + .slider:before { transform: translateX(20px); }
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.save-settings-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 24px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.save-settings-btn:hover { opacity: 0.85; }
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Streaming: thinking block */
+.thinking-block {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  background: rgba(255,255,255,0.02);
+  border-left: 2px solid var(--border);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Streaming: cypher generation in real-time */
+.cypher-streaming {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.02);
+  padding: 8px 12px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  margin-bottom: 8px;
+}
+
+/* Streaming: cursor blink */
+.stream-cursor::after {
+  content: '▊';
+  animation: blink 1s infinite;
+  color: var(--accent);
+}
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }

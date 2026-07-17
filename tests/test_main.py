@@ -133,3 +133,34 @@ class TestLogsEndpoint:
             resp = client.get("/api/logs")
         assert resp.status_code == 200
         assert "logs" in resp.json()
+
+
+class TestSettingsEndpoint:
+    def test_get_settings(self, client):
+        resp = client.get("/api/settings")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "model" in data
+        assert "base_url" in data
+        assert "think" in data
+        assert "max_tokens" in data
+
+    def test_update_settings(self, client):
+        resp = client.put("/api/settings", json={
+            "model": "test-model",
+            "think": True,
+            "max_tokens": 4096,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model"] == "test-model"
+        assert data["think"] is True
+        assert data["max_tokens"] == 4096
+
+    def test_api_key_masked_in_get(self, client):
+        # Set a key
+        client.put("/api/settings", json={"api_key": "sk-1234567890abcdef"})
+        # Get — should be masked
+        resp = client.get("/api/settings")
+        data = resp.json()
+        assert "••••" in data["api_key"]

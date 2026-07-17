@@ -6,28 +6,27 @@ Two-step pipeline:
 
 Самопроверка: если Cypher упал с синтаксической ошибкой — бэкенд возвращает
 ошибку LLM, та пробует снова (до 3 попыток).
+
+Streaming: ask_stream() — генератор, yielding SSE events для фронтенда.
+Think-режим: при think=True используется Ollama native API (/api/chat),
+который поддерживает separate reasoning/content streams.
 """
 import json
 import logging
 import os
 import re
 import time
+from typing import Generator
 
 import requests
 from neo4j import GraphDatabase
 
 import db
+import session_config
 
 log = logging.getLogger("graphrag")
 
-# --- Конфигурация LLM ---
-
-LLM_BASE_URL = os.environ.get("GRAPHRAG_LLM_BASE_URL", "https://ollama.com/v1")
-LLM_API_KEY = os.environ.get("GRAPHRAG_LLM_API_KEY", os.environ.get("OLLAMA_API_KEY", ""))
-LLM_MODEL = os.environ.get("GRAPHRAG_LLM_MODEL", "glm-5.2")
-LLM_MAX_TOKENS = int(os.environ.get("GRAPHRAG_LLM_MAX_TOKENS", "8192"))
-
-# --- Конфигурация Neo4j ---
+# --- Конфигурация Neo4j (env, не меняется через UI) ---
 
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
@@ -35,7 +34,7 @@ NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
 
 MAX_CYPHER_ATTEMPTS = 3
 
-# --- Схема графа (для system prompt) ---
+# --- Промпты (defaults, могут быть переопределены через session config) ---
 
 GRAPH_SCHEMA = """\
 Узлы:
@@ -79,7 +78,7 @@ Anime.mal_status — INDEX.
   Anime.year — число, Anime.season — lowercase (winter/spring/summer/fall).
 """
 
-CYPHER_SYSTEM_PROMPT = f"""\
+DEFAULT_CYPHER_PROMPT = f"""\
 Ты — эксперт по Cypher-запросам к Neo4j. Тебе задаёт вопрос пользователь на русском.
 Твоя задача — составить Cypher-запрос к графу MyAnimeList и вернуть ТОЛЬКО запрос,
 без объяснений, без markdown-блоков, без лишнего текста.
@@ -119,7 +118,7 @@ CYPHER_SYSTEM_PROMPT = f"""\
 12. Ответы на русском потом сформулирует другая часть системы — ты только Cypher.
 """
 
-ANSWER_SYSTEM_PROMPT = """\
+DEFAULT_ANSWER_PROMPT = """\
 Ты — ассистент по аниме. Тебе задали вопрос, ты выполнил запрос к базе данных MyAnimeList.
 Сейчас тебе вернулся результат. Сформулируй ответ на русском языке.
 
@@ -134,36 +133,184 @@ ANSWER_SYSTEM_PROMPT = """\
 
 
 # --------------------------------------------------------------------------- #
-# Helpers: LLM calls, Cypher extraction, Neo4j execution                      #
+# Config helpers                                                               #
 # --------------------------------------------------------------------------- #
 
+def _cfg() -> session_config.SessionConfig:
+    return session_config.get_config()
+
+
+def _cypher_prompt() -> str:
+    return _cfg().cypher_prompt or DEFAULT_CYPHER_PROMPT
+
+
+def _answer_prompt() -> str:
+    return _cfg().answer_prompt or DEFAULT_ANSWER_PROMPT
+
+
+# --------------------------------------------------------------------------- #
+# LLM calls: non-streaming + streaming                                        #
+# --------------------------------------------------------------------------- #
+
+def _is_ollama(base_url: str) -> bool:
+    """True если URL похож на Ollama (для native /api/chat)."""
+    return ":11434" in base_url or "ollama" in base_url.lower()
+
+
 def _llm_call(system_prompt: str, user_content: str, max_tokens: int = 4096) -> str:
-    """Вызов LLM через OpenAI-compatible API."""
+    """Не-streaming вызов LLM. Возвращает полный текст content."""
+    cfg = _cfg()
+    if cfg.think and _is_ollama(cfg.base_url):
+        return _ollama_native_call(system_prompt, user_content, max_tokens)
+    return _openai_call(system_prompt, user_content, max_tokens)
+
+
+def _openai_call(system_prompt: str, user_content: str, max_tokens: int) -> str:
+    """OpenAI-compatible /v1/chat/completions."""
+    cfg = _cfg()
     resp = requests.post(
-        f"{LLM_BASE_URL}/chat/completions",
+        f"{cfg.base_url}/chat/completions",
         headers={
-            "Authorization": f"Bearer {LLM_API_KEY}",
+            "Authorization": f"Bearer {cfg.api_key}",
             "Content-Type": "application/json",
         },
         json={
-            "model": LLM_MODEL,
+            "model": cfg.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
             "max_tokens": max_tokens,
             "temperature": 0.1,
+            "stream": False,
         },
-        timeout=60,
+        timeout=120,
     )
     resp.raise_for_status()
-    return _extract_content(resp.json())
+    return (resp.json()["choices"][0]["message"].get("content") or "").strip()
 
 
-def _extract_content(data: dict) -> str:
-    """Извлекает текст ответа из JSON ответа LLM API."""
-    return data["choices"][0]["message"]["content"].strip()
+def _ollama_native_call(system_prompt: str, user_content: str, max_tokens: int) -> str:
+    """Ollama native /api/chat с think-поддержкой."""
+    cfg = _cfg()
+    # /v1 → base without /v1
+    base = cfg.base_url.replace("/v1", "")
+    resp = requests.post(
+        f"{base}/api/chat",
+        json={
+            "model": cfg.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "stream": False,
+            "think": cfg.think,
+            "options": {"num_predict": max_tokens, "temperature": 0.1},
+        },
+        timeout=120,
+    )
+    resp.raise_for_status()
+    return (resp.json().get("message", {}).get("content") or "").strip()
 
+
+def _llm_stream(system_prompt: str, user_content: str, max_tokens: int
+                ) -> Generator[dict, None, None]:
+    """Streaming генератор. Yields dicts: {type: 'thinking'|'content'|'done', text: str}."""
+    cfg = _cfg()
+    if cfg.think and _is_ollama(cfg.base_url):
+        yield from _ollama_stream(system_prompt, user_content, max_tokens)
+    else:
+        yield from _openai_stream(system_prompt, user_content, max_tokens)
+
+
+def _openai_stream(system_prompt: str, user_content: str, max_tokens: int
+                   ) -> Generator[dict, None, None]:
+    """OpenAI SSE streaming."""
+    cfg = _cfg()
+    resp = requests.post(
+        f"{cfg.base_url}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {cfg.api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": cfg.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+            "stream": True,
+        },
+        timeout=120,
+        stream=True,
+    )
+    resp.raise_for_status()
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        line = line.decode("utf-8")
+        if not line.startswith("data: "):
+            continue
+        data = line[6:]
+        if data == "[DONE]":
+            yield {"type": "done", "text": ""}
+            return
+        try:
+            chunk = json.loads(data)
+            delta = chunk["choices"][0].get("delta", {})
+            content = delta.get("content", "")
+            if content:
+                yield {"type": "content", "text": content}
+        except (json.JSONDecodeError, KeyError, IndexError):
+            continue
+    yield {"type": "done", "text": ""}
+
+
+def _ollama_stream(system_prompt: str, user_content: str, max_tokens: int
+                   ) -> Generator[dict, None, None]:
+    """Ollama native /api/chat streaming with think support."""
+    cfg = _cfg()
+    base = cfg.base_url.replace("/v1", "")
+    resp = requests.post(
+        f"{base}/api/chat",
+        json={
+            "model": cfg.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "stream": True,
+            "think": cfg.think,
+            "options": {"num_predict": max_tokens, "temperature": 0.1},
+        },
+        timeout=120,
+        stream=True,
+    )
+    resp.raise_for_status()
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        try:
+            chunk = json.loads(line.decode("utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if chunk.get("done"):
+            yield {"type": "done", "text": ""}
+            return
+        msg = chunk.get("message", {})
+        # В streaming-режиме Ollama не разделяет thinking/content,
+        # но при think=True поле может содержать reasoning
+        content = msg.get("content", "")
+        if content:
+            yield {"type": "content", "text": content}
+    yield {"type": "done", "text": ""}
+
+
+# --------------------------------------------------------------------------- #
+# Cypher helpers                                                               #
+# --------------------------------------------------------------------------- #
 
 def _extract_cypher(text: str) -> str:
     """Извлекает Cypher из ответа LLM (убирает markdown-блоки если есть)."""
@@ -186,12 +333,13 @@ def _run_cypher(cypher: str) -> tuple[list[dict] | None, str | None]:
 
 
 # --------------------------------------------------------------------------- #
-# Helpers: result construction                                                 #
+# Result helpers                                                               #
 # --------------------------------------------------------------------------- #
 
 def _make_result(answer, cypher, status, rows, attempts, error,
                  t0, raw=None) -> dict:
     """Создаёт единый dict результата с метаданными."""
+    cfg = _cfg()
     return {
         "answer": answer,
         "cypher": cypher,
@@ -199,30 +347,26 @@ def _make_result(answer, cypher, status, rows, attempts, error,
         "rows": rows,
         "attempts": attempts,
         "error": error,
-        "model": LLM_MODEL,
-        "llm_base_url": LLM_BASE_URL,
+        "model": cfg.model,
+        "llm_base_url": cfg.base_url,
         "duration_sec": round(time.time() - t0, 2),
         "cypher_raw": raw,
     }
 
 
 def _is_invalid(cypher: str) -> bool:
-    """True если LLM вернул пустой ответ или INVALID."""
     return not cypher.strip() or cypher.upper().strip() == "INVALID"
 
 
 def _is_clarify(cypher: str) -> bool:
-    """True если LLM запросил уточнение (CLARIFY: ...)."""
     return cypher.strip().upper().startswith("CLARIFY:")
 
 
 def _clarify_question(cypher: str) -> str:
-    """Извлекает уточняющий вопрос из 'CLARIFY: <вопрос>'."""
     return cypher.strip()[len("CLARIFY:"):].strip()
 
 
 def _build_history_context(history: list[dict]) -> str:
-    """Превращает историю чата в текстовый контекст для LLM."""
     if not history:
         return ""
     lines = ["", "Предыдущий контекст разговора:"]
@@ -233,14 +377,19 @@ def _build_history_context(history: list[dict]) -> str:
 
 
 def _build_retry_message(question: str, error: str) -> str:
-    """Сообщение для повторной попытки Cypher после ошибки."""
     return (f"Вопрос: {question}\n\n"
             f"Предыдущая попытка Cypher упала с ошибкой:\n{error}\n\n"
             "Исправь запрос и попробуй снова.")
 
 
+def _build_user_message(question: str, history_ctx: str,
+                        error: str | None, attempt: int) -> str:
+    if attempt == 1:
+        return f"Вопрос: {question}{history_ctx}"
+    return _build_retry_message(question, error)
+
+
 def _truncate_rows(rows: list[dict]) -> str:
-    """Ограничивает размер данных для LLM: 100 строк max."""
     limited = rows[:100]
     result_str = json.dumps(limited, ensure_ascii=False, default=str)
     if len(rows) > 100:
@@ -248,32 +397,12 @@ def _truncate_rows(rows: list[dict]) -> str:
     return result_str
 
 
-def _formulate_answer(question: str, rows: list[dict]) -> str:
-    """Шаг 3: LLM формулирует ответ на русском из результатов Cypher."""
-    if not rows:
-        return "Не нашёл информации по этому запросу."
-    try:
-        return _llm_call(
-            ANSWER_SYSTEM_PROMPT,
-            f"Вопрос: {question}\n\n"
-            f"Результат запроса ({len(rows)} строк):\n{_truncate_rows(rows)}",
-            max_tokens=LLM_MAX_TOKENS,
-        )
-    except Exception as e:
-        log.error("Answer LLM call failed: %s", e)
-        return f"Запрос выполнен ({len(rows)} строк), но не удалось сформулировать ответ: {e}"
-
-
-# --------------------------------------------------------------------------- #
-# Helpers: logging                                                             #
-# --------------------------------------------------------------------------- #
-
 def _log_and_return(chat_id, question, cypher, status, rows, error, attempts,
                     t0, raw, answer):
-    """Логирует запрос в SQLite и возвращает result dict."""
     if chat_id:
+        cfg = _cfg()
         db.log_query(chat_id, question, cypher, status, rows, error, attempts,
-                      model=LLM_MODEL, llm_base_url=LLM_BASE_URL,
+                      model=cfg.model, llm_base_url=cfg.base_url,
                       answer=answer,
                       duration_sec=round(time.time() - t0, 2),
                       cypher_raw=raw)
@@ -281,15 +410,11 @@ def _log_and_return(chat_id, question, cypher, status, rows, error, attempts,
 
 
 # --------------------------------------------------------------------------- #
-# Main pipeline                                                                #
+# Non-streaming pipeline                                                       #
 # --------------------------------------------------------------------------- #
 
 def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
-    """Полный пайплайн: question → Cypher → Neo4j → answer.
-
-    Возвращает: {answer, cypher, status, rows, attempts, error, model,
-                 llm_base_url, duration_sec, cypher_raw}
-    """
+    """Полный пайплайн: question → Cypher → Neo4j → answer (non-streaming)."""
     t0 = time.time()
     history_ctx = _build_history_context(history or [])
     cypher = None
@@ -298,10 +423,9 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
 
     for attempt in range(1, MAX_CYPHER_ATTEMPTS + 1):
         log.info("Cypher attempt %d/%d for: %s", attempt, MAX_CYPHER_ATTEMPTS, question[:80])
-
         user_msg = _build_user_message(question, history_ctx, error, attempt)
         try:
-            raw = _llm_call(CYPHER_SYSTEM_PROMPT, user_msg, max_tokens=2048)
+            raw = _llm_call(_cypher_prompt(), user_msg, max_tokens=_cfg().max_tokens)
         except Exception as e:
             log.error("LLM call failed: %s", e)
             return _make_result(
@@ -311,7 +435,7 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
         cypher = _extract_cypher(raw)
 
         if _is_invalid(cypher):
-            log.info("LLM returned empty/INVALID for this question")
+            log.info("LLM returned empty/INVALID")
             return _log_and_return(
                 chat_id, question, cypher or "(empty)", "invalid",
                 0, None, attempt, t0, raw,
@@ -330,7 +454,6 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
             log.warning("Cypher error (attempt %d): %s", attempt, error[:200])
             continue
 
-        # Cypher выполнен успешно
         safe_rows = rows or []
         row_count = len(safe_rows)
         status = "ok" if row_count else "empty"
@@ -339,7 +462,6 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
         return _log_and_return(
             chat_id, question, cypher, status, row_count, None, attempt, t0, raw, answer)
 
-    # Все попытки исчерпаны
     error_answer = (f"Не удалось выполнить запрос к базе после "
                     f"{MAX_CYPHER_ATTEMPTS} попыток. Последняя ошибка: {error}")
     return _log_and_return(
@@ -347,9 +469,135 @@ def ask(question: str, chat_id: str = None, history: list[dict] = None) -> dict:
         MAX_CYPHER_ATTEMPTS, t0, raw, error_answer)
 
 
-def _build_user_message(question: str, history_ctx: str,
-                        error: str | None, attempt: int) -> str:
-    """Собирает сообщение для LLM в зависимости от номера попытки."""
-    if attempt == 1:
-        return f"Вопрос: {question}{history_ctx}"
-    return _build_retry_message(question, error)
+def _formulate_answer(question: str, rows: list[dict]) -> str:
+    """Шаг 3: LLM формулирует ответ на русском из результатов Cypher."""
+    if not rows:
+        return "Не нашёл информации по этому запросу."
+    try:
+        return _llm_call(
+            _answer_prompt(),
+            f"Вопрос: {question}\n\n"
+            f"Результат запроса ({len(rows)} строк):\n{_truncate_rows(rows)}",
+            max_tokens=_cfg().max_tokens,
+        )
+    except Exception as e:
+        log.error("Answer LLM call failed: %s", e)
+        return f"Запрос выполнен ({len(rows)} строк), но не удалось сформулировать ответ: {e}"
+
+
+# --------------------------------------------------------------------------- #
+# Streaming pipeline (SSE for frontend)                                       #
+# --------------------------------------------------------------------------- #
+
+def ask_stream(question: str, chat_id: str = None,
+               history: list[dict] = None) -> Generator[str, None, None]:
+    """Streaming пайплайн. Yields SSE-formatted strings for EventSource.
+
+    Events:
+      data: {"type":"thinking","text":"..."}    — LLM thinking (if think=True)
+      data: {"type":"cypher","text":"..."}       — Cypher chunk (step 1)
+      data: {"type":"cypher_done","cypher":"...","raw":"..."}  — final Cypher
+      data: {"type":"status","status":"ok|empty|invalid|clarify|error", ...}
+      data: {"type":"answer","text":"..."}       — Answer chunk (step 3)
+      data: {"type":"answer_done","answer":"..."}
+      data: {"type":"result","answer":"...","cypher":"...","status":"...","rows":N,...}
+    """
+    t0 = time.time()
+    cfg = _cfg()
+    history_ctx = _build_history_context(history or [])
+    cypher = None
+    raw_parts = []
+    error = None
+
+    for attempt in range(1, MAX_CYPHER_ATTEMPTS + 1):
+        log.info("Cypher attempt %d/%d for: %s", attempt, MAX_CYPHER_ATTEMPTS, question[:80])
+        user_msg = _build_user_message(question, history_ctx, error, attempt)
+
+        # Step 1: stream Cypher generation
+        try:
+            for event in _llm_stream(_cypher_prompt(), user_msg, cfg.max_tokens):
+                if event["type"] == "content":
+                    raw_parts.append(event["text"])
+                    yield _sse({"type": "cypher", "text": event["text"]})
+                elif event["type"] == "done":
+                    break
+        except Exception as e:
+            log.error("LLM stream failed: %s", e)
+            result = _make_result(
+                f"Ошибка при обращении к LLM: {e}", None, "llm_error",
+                0, attempt, str(e), t0)
+            yield _sse({"type": "result", **result})
+            return
+
+        raw = "".join(raw_parts)
+        cypher = _extract_cypher(raw)
+        yield _sse({"type": "cypher_done", "cypher": cypher, "raw": raw})
+
+        if _is_invalid(cypher):
+            log.info("LLM returned empty/INVALID")
+            result = _log_and_return(
+                chat_id, question, cypher or "(empty)", "invalid",
+                0, None, attempt, t0, raw,
+                "Не нашёл информации по этому запросу. Я могу отвечать на вопросы "
+                "о тайтлах, студиях, жанрах, персонажах, сэйю, режиссёрах и связях между ними.")
+            yield _sse({"type": "result", **result})
+            return
+
+        if _is_clarify(cypher):
+            clarify = _clarify_question(cypher)
+            result = _log_and_return(
+                chat_id, question, cypher, "clarify",
+                0, None, attempt, t0, raw, clarify)
+            yield _sse({"type": "result", **result})
+            return
+
+        # Step 2: run Cypher in Neo4j
+        rows, error = _run_cypher(cypher)
+        if error is not None:
+            log.warning("Cypher error (attempt %d): %s", attempt, error[:200])
+            yield _sse({"type": "cypher_error", "error": error, "attempt": attempt})
+            continue
+
+        # Step 3: stream answer formulation
+        safe_rows = rows or []
+        row_count = len(safe_rows)
+        status = "ok" if row_count else "empty"
+        yield _sse({"type": "status", "status": status, "rows": row_count})
+
+        answer_parts = []
+        if row_count:
+            answer_msg = (f"Вопрос: {question}\n\n"
+                          f"Результат запроса ({row_count} строк):\n"
+                          f"{_truncate_rows(safe_rows)}")
+            try:
+                for event in _llm_stream(_answer_prompt(), answer_msg, cfg.max_tokens):
+                    if event["type"] == "content":
+                        answer_parts.append(event["text"])
+                        yield _sse({"type": "answer", "text": event["text"]})
+                    elif event["type"] == "done":
+                        break
+            except Exception as e:
+                log.error("Answer LLM stream failed: %s", e)
+                answer_parts.append(
+                    f"Запрос выполнен ({row_count} строк), но не удалось сформулировать ответ: {e}")
+        else:
+            answer_parts.append("Не нашёл информации по этому запросу.")
+
+        answer = "".join(answer_parts)
+        result = _log_and_return(
+            chat_id, question, cypher, status, row_count, None, attempt, t0, raw, answer)
+        yield _sse({"type": "result", **result})
+        return
+
+    # All attempts exhausted
+    error_answer = (f"Не удалось выполнить запрос к базе после "
+                    f"{MAX_CYPHER_ATTEMPTS} попыток. Последняя ошибка: {error}")
+    result = _log_and_return(
+        chat_id, question, cypher or "", "error", 0, error,
+        MAX_CYPHER_ATTEMPTS, t0, raw, error_answer)
+    yield _sse({"type": "result", **result})
+
+
+def _sse(data: dict) -> str:
+    """Форматирует dict как SSE data line."""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"

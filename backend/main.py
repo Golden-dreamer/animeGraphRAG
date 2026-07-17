@@ -4,12 +4,13 @@ import os
 import uuid
 
 from fastapi import FastAPI, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import db
 import graphrag
+import session_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("main")
@@ -29,8 +30,9 @@ FRONTEND_DIR = _resolve_frontend_dir()
 @app.on_event("startup")
 def startup():
     db.init_db()
-    log.info("GraphRAG server started. LLM model=%s, Neo4j=%s",
-             graphrag.LLM_MODEL, graphrag.NEO4J_URI)
+    cfg = session_config.get_config()
+    log.info("GraphRAG server started. LLM model=%s, base_url=%s, Neo4j=%s",
+             cfg.model, cfg.base_url, graphrag.NEO4J_URI)
 
 
 # --- Статика (фронтенд) ---
@@ -51,6 +53,16 @@ class ChatCreate(BaseModel):
 
 class ChatMessage(BaseModel):
     message: str
+
+
+class SettingsUpdate(BaseModel):
+    model: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    max_tokens: int | None = None
+    think: bool | None = None
+    cypher_prompt: str | None = None
+    answer_prompt: str | None = None
 
 
 # --- API чатов ---
@@ -88,18 +100,43 @@ def api_get_messages(chat_id: str):
 
 @app.post("/api/chats/{chat_id}/ask")
 def api_ask(chat_id: str, req: ChatMessage):
+    """Non-streaming ask (fallback)."""
     history = db.get_messages(chat_id)
     db.add_message(chat_id, "user", req.message)
-
     result = graphrag.ask(req.message, chat_id=chat_id, history=history)
     db.add_message(chat_id, "assistant", result["answer"])
-
     _record_metrics(result)
     return _build_ask_response(result)
 
 
+@app.post("/api/chats/{chat_id}/ask/stream")
+def api_ask_stream(chat_id: str, req: ChatMessage):
+    """Streaming ask via SSE (Server-Sent Events)."""
+    history = db.get_messages(chat_id)
+    db.add_message(chat_id, "user", req.message)
+
+    def generate():
+        answer_parts = []
+        for sse in graphrag.ask_stream(req.message, chat_id=chat_id, history=history):
+            # Перехватываем answer для сохранения в БД
+            try:
+                import json
+                data = json.loads(sse.replace("data: ", "").strip())
+                if data.get("type") == "answer":
+                    answer_parts.append(data.get("text", ""))
+                elif data.get("type") == "result":
+                    answer = data.get("answer", "")
+                    if answer:
+                        db.add_message(chat_id, "assistant", answer)
+                    _record_metrics_from_result(data)
+            except Exception:
+                pass
+            yield sse
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 def _build_ask_response(result: dict) -> dict:
-    """Собирает JSON-ответ из result пайплайна."""
     return {
         "answer": result["answer"],
         "cypher": result["cypher"],
@@ -111,6 +148,21 @@ def _build_ask_response(result: dict) -> dict:
         "duration_sec": result.get("duration_sec"),
         "cypher_raw": result.get("cypher_raw"),
     }
+
+
+# --- API настроек ---
+
+@app.get("/api/settings")
+def api_get_settings():
+    return session_config.get_settings()
+
+
+@app.put("/api/settings")
+def api_update_settings(req: SettingsUpdate):
+    updated = session_config.update_settings(**req.model_dump(exclude_none=True))
+    log.info("Settings updated: model=%s, think=%s, base_url=%s",
+             updated.get("model"), updated.get("think"), updated.get("base_url"))
+    return updated
 
 
 # --- API логов ---
@@ -127,7 +179,8 @@ def logs_page():
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "model": graphrag.LLM_MODEL, "llm_base_url": graphrag.LLM_BASE_URL}
+    cfg = session_config.get_config()
+    return {"ok": True, "model": cfg.model, "llm_base_url": cfg.base_url}
 
 
 # --- Prometheus metrics ---
@@ -163,7 +216,6 @@ def _metrics_observe_duration(sec: float):
 
 
 def _record_metrics(result: dict):
-    """Обновляет счётчики Prometheus по результату ask()."""
     _metrics_inc("graphrag_requests_total")
     _metrics_inc("graphrag_cypher_attempts_total", result.get("attempts", 1))
     _metrics_inc("graphrag_rows_returned_total", result.get("rows", 0))
@@ -173,9 +225,19 @@ def _record_metrics(result: dict):
         _metrics_inc(metric)
 
 
+def _record_metrics_from_result(data: dict):
+    """Извлекает метрики из SSE result event."""
+    _metrics_inc("graphrag_requests_total")
+    _metrics_inc("graphrag_cypher_attempts_total", data.get("attempts", 1))
+    _metrics_inc("graphrag_rows_returned_total", data.get("rows", 0))
+    _metrics_observe_duration(data.get("duration_sec", 0))
+    metric = _STATUS_METRIC_MAP.get(data.get("status", "error"))
+    if metric:
+        _metrics_inc(metric)
+
+
 @app.get("/metrics")
 def metrics():
-    """Prometheus text exposition format."""
     lines = []
     for name, val in _metrics.items():
         if name.endswith("_sum"):
@@ -190,7 +252,6 @@ def metrics():
 
 
 def _format_summary(name: str, val: float) -> list[str]:
-    """Форматирует summary-метрику (_sum + _count)."""
     base = name[:-4]
     return [
         f"# TYPE {base} summary",
