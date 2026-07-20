@@ -146,16 +146,28 @@ def _link_related(tx, mal_id: int, rel: dict):
         return
 
     label = "Anime" if mal_type == "anime" else "Manga"
-    # Тип связи: RELATED_TO с property relation
-    tx.run(f"""
-        MERGE (a:Anime {{mal_id: $mal_id}})
-        MERGE (t:{label} {{mal_id: $target_id}})
-        SET t.title = coalesce(t.title, $title)
-        MERGE (a)-[r:RELATED_TO]->(t)
-        SET r.relation = $relation,
-            r.target_type = $target_type
-    """, mal_id=mal_id, target_id=target_id, title=title,
-         relation=relation, target_type=mal_type)
+    # Для Anime-целей НЕ ставим title — узел должен оставаться stub'ом
+    # (title IS NULL), чтобы scheduler его обработал. Manga-цели получают
+    # title, т.к. не парсятся этим парсером.
+    if mal_type == "anime":
+        tx.run(f"""
+            MERGE (a:Anime {{mal_id: $mal_id}})
+            MERGE (t:{label} {{mal_id: $target_id}})
+            MERGE (a)-[r:RELATED_TO]->(t)
+            SET r.relation = $relation,
+                r.target_type = $target_type
+        """, mal_id=mal_id, target_id=target_id,
+             relation=relation, target_type=mal_type)
+    else:
+        tx.run(f"""
+            MERGE (a:Anime {{mal_id: $mal_id}})
+            MERGE (t:{label} {{mal_id: $target_id}})
+            SET t.title = coalesce(t.title, $title)
+            MERGE (a)-[r:RELATED_TO]->(t)
+            SET r.relation = $relation,
+                r.target_type = $target_type
+        """, mal_id=mal_id, target_id=target_id, title=title,
+             relation=relation, target_type=mal_type)
 
 
 def _link_external(tx, mal_id: int, link: dict, rel_type: str):
@@ -256,18 +268,3 @@ def close():
     if _driver is not None:
         _driver.close()
         _driver = None
-
-
-def upsert_staff_only(mal_id: int, staff: list[dict]):
-    """Обновляет только staff-связи для аниме (без перезаписи остальных полей).
-
-    Используется скриптом update_staff.py для дополнения неполного staff
-    без повторного парсинга всей страницы аниме. MERGE гарантирует
-    отсутствие дубликатов.
-    """
-    with get_driver().session() as session:
-        # MERGE узла Anime (на случай если его нет)
-        session.run("MERGE (a:Anime {mal_id: $mal_id})", mal_id=mal_id)
-
-        for person in staff:
-            session.execute_write(_link_staff, mal_id, person)

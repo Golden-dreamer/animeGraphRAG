@@ -15,14 +15,22 @@ from loader import get_driver
 
 def upsert_anime_stub(mal_id: int, year: int, season: str) -> int:
     """Регистрирует тайтл в графе, если его ещё нет.
-    Возвращает 1 если создан, 0 если уже существовал."""
+    Возвращает 1 если создан, 0 если уже существовал.
+
+    Если узел уже существует, но без year/season — дозаполняет их,
+    чтобы bootstrap мог найти stub по сезону.
+    """
     with get_driver().session() as session:
-        # Проверяем существование до MERGE — mal_id проиндексирован (constraint).
         existed = session.run(
             "MATCH (a:Anime {mal_id: $mal_id}) RETURN count(a) AS c",
             mal_id=mal_id,
         ).single()["c"]
         if existed:
+            session.run("""
+                MATCH (a:Anime {mal_id: $mal_id})
+                SET a.year = coalesce(a.year, $year),
+                    a.season = coalesce(a.season, $season)
+            """, mal_id=mal_id, year=year, season=season)
             return 0
         session.run("""
             MERGE (a:Anime {mal_id: $mal_id})
@@ -37,10 +45,10 @@ def select_due_anime(limit: int | None = None) -> list[int]:
     Критерии (объединение):
       1. mal_status IN ['Currently Airing', 'Not yet aired'] — airing тайтлы,
          у которых меняются эпизоды/оценки/статус (обновляем каждый цикл)
-      2. title IS NULL — stub'ы, никогда не обработанные (у них mal_status
-         тоже NULL, поэтому критерий 1 их не ловит). Сcheduler их обработает,
-         получит mal_status с MAL, и дальше они попадут под критерий 1 или
-         выпадут (если Finished Airing — больше не актуальны).
+      2. mal_status IS NULL — необработанные stub'ы (узлы, созданные через
+         discover или _link_related, но ещё не отпарсенные process_one).
+         После обработки mal_status заполнится ('Finished Airing' и т.д.)
+         и тайтл выпадет из очереди (или останется, если airing/upcoming).
 
     Порядок: сначала stub'ы (нужно получить данные), потом airing, потом upcoming.
     Если limit=None — возвращает все без лимита."""
@@ -48,10 +56,10 @@ def select_due_anime(limit: int | None = None) -> list[int]:
         query = """
             MATCH (a:Anime)
             WHERE a.mal_status IN ['Currently Airing', 'Not yet aired']
-               OR a.title IS NULL
+               OR a.mal_status IS NULL
             RETURN a.mal_id AS mal_id,
                    CASE
-                     WHEN a.title IS NULL THEN 0
+                     WHEN a.mal_status IS NULL THEN 0
                      WHEN a.mal_status = 'Currently Airing' THEN 1
                      WHEN a.mal_status = 'Not yet aired' THEN 2
                      ELSE 3
