@@ -218,14 +218,17 @@ async function send(text) {
     answerEl.innerHTML = `Ошибка: ${e.message}`;
   }
 
-  // Update chat title from first message
+  // Auto-generate chat title from first message via LLM
   if (finalResult) {
     const chats = $$('.chat-item');
-    if (chats.length === 1) {
-      const title = text.slice(0, 40) + (text.length > 40 ? '...' : '');
-      $('#chatTitle').textContent = title;
-      await api('PUT', `/api/chats/${currentChat}`, { title });
-      await loadChats();
+    if (chats.length === 1 && $('#chatTitle').textContent === 'Новый чат') {
+      try {
+        const titleData = await api('POST', `/api/chats/${currentChat}/title`, { message: text });
+        if (titleData.title) {
+          $('#chatTitle').textContent = titleData.title;
+          await loadChats();
+        }
+      } catch (e) { /* fallback keeps original title */ }
     }
   }
 

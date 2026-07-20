@@ -98,6 +98,14 @@ def api_get_messages(chat_id: str):
 
 # --- API запросов к графу ---
 
+@app.post("/api/chats/{chat_id}/title")
+def api_generate_title(chat_id: str, req: ChatMessage):
+    """Генерирует название чата из первого сообщения пользователя."""
+    title = graphrag.generate_title(req.message)
+    db.rename_chat(chat_id, title)
+    return {"title": title}
+
+
 @app.post("/api/chats/{chat_id}/ask")
 def api_ask(chat_id: str, req: ChatMessage):
     """Non-streaming ask (fallback)."""
