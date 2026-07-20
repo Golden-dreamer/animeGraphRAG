@@ -320,16 +320,24 @@ def _extract_cypher(text: str) -> str:
     return text.strip()
 
 
+_driver = None
+
+
+def _get_driver():
+    """Singleton Neo4j driver — создаётся один раз, переиспользуется."""
+    global _driver
+    if _driver is None:
+        _driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    return _driver
+
+
 def _run_cypher(cypher: str) -> tuple[list[dict] | None, str | None]:
     """Выполняет Cypher в Neo4j. Возвращает (rows, error)."""
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     try:
-        with driver.session() as session:
+        with _get_driver().session() as session:
             return [dict(r) for r in session.run(cypher)], None
     except Exception as e:
         return None, str(e)
-    finally:
-        driver.close()
 
 
 # --------------------------------------------------------------------------- #
