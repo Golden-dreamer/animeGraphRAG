@@ -2,8 +2,8 @@
 
 Без SQLite, без retry-логики.
 Логика:
-  - "Не обработан" = узел :Anime с title IS NULL (stub)
-  - Актуальные = mal_status IN ['Currently Airing', 'Not yet aired']
+  - "Не обработан" = узел :Anime с mal_status IS NULL (stub)
+  - Актуальные = mal_status IN DUE_STATUSES (см. schema.py)
   - Scheduler каждый цикл обновляет все актуальные + stub'ы
   - /refresh вызывает process_one напрямую
   - Прогресс bootstrap — в текстовом файле (bootstrap_progress.txt)
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from loader import get_driver
+from schema import DUE_STATUSES, AnimeStatus
 
 
 def upsert_anime_stub(mal_id: int, year: int, season: str) -> int:
@@ -43,30 +44,32 @@ def select_due_anime(limit: int | None = None) -> list[int]:
     """Актуальные тайтлы для scheduler.
 
     Критерии (объединение):
-      1. mal_status IN ['Currently Airing', 'Not yet aired'] — airing тайтлы,
-         у которых меняются эпизоды/оценки/статус (обновляем каждый цикл)
+      1. mal_status IN DUE_STATUSES — airing/upcoming тайтлы, у которых
+         меняются эпизоды/оценки/статус (обновляем каждый цикл)
       2. mal_status IS NULL — необработанные stub'ы (узлы, созданные через
          discover или _link_related, но ещё не отпарсенные process_one).
-         После обработки mal_status заполнится ('Finished Airing' и т.д.)
-         и тайтл выпадет из очереди (или останется, если airing/upcoming).
+         После обработки mal_status заполнится и тайтл выпадет из очереди
+         (или останется, если airing/upcoming).
 
     Порядок: сначала stub'ы (нужно получить данные), потом airing, потом upcoming.
     Если limit=None — возвращает все без лимита."""
+    airing = AnimeStatus.AIRING.value
+    upcoming = AnimeStatus.NOT_YET_AIRED.value
     with get_driver().session() as session:
         query = """
             MATCH (a:Anime)
-            WHERE a.mal_status IN ['Currently Airing', 'Not yet aired']
+            WHERE a.mal_status IN $due_statuses
                OR a.mal_status IS NULL
             RETURN a.mal_id AS mal_id,
                    CASE
                      WHEN a.mal_status IS NULL THEN 0
-                     WHEN a.mal_status = 'Currently Airing' THEN 1
-                     WHEN a.mal_status = 'Not yet aired' THEN 2
+                     WHEN a.mal_status = $airing THEN 1
+                     WHEN a.mal_status = $upcoming THEN 2
                      ELSE 3
                    END AS priority
             ORDER BY priority, a.mal_id
         """
-        params = {}
+        params = {"due_statuses": list(DUE_STATUSES), "airing": airing, "upcoming": upcoming}
         if limit is not None:
             query += " LIMIT $limit"
             params["limit"] = limit
@@ -105,10 +108,12 @@ def get_stats() -> dict:
             "MATCH (a:Anime) WHERE a.title IS NULL RETURN count(a) AS c"
         ).single()["c"]
         airing = session.run(
-            "MATCH (a:Anime) WHERE a.mal_status = 'Currently Airing' RETURN count(a) AS c"
+            "MATCH (a:Anime) WHERE a.mal_status = $s RETURN count(a) AS c",
+            s=AnimeStatus.AIRING.value,
         ).single()["c"]
         upcoming = session.run(
-            "MATCH (a:Anime) WHERE a.mal_status = 'Not yet aired' RETURN count(a) AS c"
+            "MATCH (a:Anime) WHERE a.mal_status = $s RETURN count(a) AS c",
+            s=AnimeStatus.NOT_YET_AIRED.value,
         ).single()["c"]
         return {
             "total_anime": total,

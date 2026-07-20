@@ -7,7 +7,10 @@ VOICE_ACTED (с языком), HAS_CHARACTER, RELATED_TO (с типом relation
 AVAILABLE_AT, STREAMING_ON, HAS_RESOURCE.
 """
 import os
+
 from neo4j import GraphDatabase
+
+from schema import ANIME_FIELDS
 
 _driver = None
 
@@ -73,42 +76,17 @@ def upsert_anime(data: dict):
 
 
 def _upsert_anime_node(tx, data: dict):
-    tx.run("""
-        MERGE (a:Anime {mal_id: $mal_id})
-        SET a.poster_url = $poster_url,
-            a.title = $title_original,
-            a.title_original = $title_original,
-            a.title_english = $title_english,
-            a.title_synonyms = $title_synonyms,
-            a.title_japanese = $title_japanese,
-            a.type = $type,
-            a.episodes = $episodes,
-            a.mal_status = $mal_status,
-            a.aired = $aired,
-            a.premiered = $premiered,
-            a.broadcast = $broadcast,
-            a.source = $source,
-            a.duration = $duration,
-            a.rating = $rating,
-            a.score = $score,
-            a.scored_by = $scored_by,
-            a.ranked = $ranked,
-            a.popularity = $popularity,
-            a.members = $members,
-            a.favorites = $favorites,
-            a.synopsis = $synopsis,
-            a.background = $background,
-            a.year = $year,
-            a.season = $season,
-            a.mal_url = $mal_url
-    """, **{k: data.get(k) for k in [
-        "mal_id", "poster_url", "title_original", "title_english",
-        "title_synonyms", "title_japanese", "type", "episodes",
-        "mal_status", "aired", "premiered", "broadcast", "source",
-        "duration", "rating", "score", "scored_by", "ranked",
-        "popularity", "members", "favorites", "synopsis", "background",
-        "year", "season", "mal_url",
-    ]})
+    # title = title_original (display alias in Neo4j Browser)
+    # поля — из schema.ANIME_FIELDS, mal_id — key (MERGE, не SET)
+    set_clauses = ["a.title = $title_original"] + [
+        f"a.{f} = ${f}" for f in ANIME_FIELDS
+    ]
+    params = {f: data.get(f) for f in ANIME_FIELDS}
+    params["mal_id"] = data.get("mal_id")
+    tx.run(
+        f"MERGE (a:Anime {{mal_id: $mal_id}})\n        SET {', '.join(set_clauses)}",
+        **params,
+    )
 
 
 def _link_genre(tx, mal_id: int, genre_name: str, rel_type: str):
