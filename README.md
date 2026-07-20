@@ -99,9 +99,6 @@ Full list of endpoints — [`docs/configuration.md`](docs/configuration.md).
 ## Utility scripts
 
 ```bash
-# Backfill staff for anime with <=4 entries
-docker compose run --rm parsers python update_staff.py
-
 # Reconcile seasonal pages against the DB and add missing ones
 docker compose run --rm parsers python check_missing.py          # current seasons
 docker compose run --rm parsers python check_missing.py --all    # all seasons (1917→)

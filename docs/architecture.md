@@ -68,14 +68,13 @@ processing.process_one(mal_id)
 | `fetcher.py` | HTTP-запросы к MyAnimeList, рейт-лимит (0.5s + 55 req/мин), ретраи с бэкоффом |
 | `mal_scraper.py` | Парсинг HTML → dict (BeautifulSoup). Три функции: `parse_season_page`, `parse_anime_page`, `parse_characters_page` |
 | `parser.py` | Нормализация данных из scraper для loader. Фоллбэк year/season из `aired` |
-| `loader.py` | dict → Cypher MERGE в Neo4j (все узлы и связи). `upsert_anime`, `upsert_staff_only` |
+| `loader.py` | dict → Cypher MERGE в Neo4j (все узлы и связи). `upsert_anime` |
 | `graph_state.py` | Состояние очереди в Neo4j. Stub'ы, due-выборка, отметки сезонов, статистика |
 | `processing.py` | Склеивает fetcher → parser → loader для одного тайтла. Общий код для scheduler и bootstrap |
 | `discover.py` | Регистрирует новые тайтлы 3 актуальных сезонов в графе (через `graph_state.upsert_anime_stub`) |
 | `scheduler_logic.py` | Один цикл: `discover_recent` + `select_due_anime` → `process_one` для каждого |
 | `bootstrap.py` | Ручной проход по всем историческим сезонам (1917→), кроме 3 актуальных |
 | `app.py` | FastAPI + фоновый цикл scheduler'а, HTTP-эндпоинты управления |
-| `update_staff.py` | Ручной скрипт: дополнение staff для аниме с <=4 записями |
 | `check_missing.py` | Ручной скрипт: сверка MAL ↔ Neo4j, добавление недостающих тайтлов |
 | `mal_seasons.py` | Утилиты сезонов: `current_season`, `shift_season`, `all_seasons` |
 | `config.py` | Загрузка `config.yaml` + env-переменных в объект `Config` |

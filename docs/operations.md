@@ -190,19 +190,6 @@ curl -X PUT http://localhost:8567/schedule \
 
 ## Утилитные скрипты
 
-### Дополнение staff
-
-Если база наполнялась до v5, staff у большинства аниме неполный:
-
-```bash
-docker compose run --rm parsers python update_staff.py
-docker compose run --rm parsers python update_staff.py --limit 100
-docker compose run --rm parsers python update_staff.py --threshold 4
-```
-
-Проходит все аниме с staff <= threshold (по умолчанию 4), фетчит
-`/characters` с правильным URL, обновляет связи через `upsert_staff_only`.
-
 ### Дополнение пропущенных тайтлов
 
 ```bash

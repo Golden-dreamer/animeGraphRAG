@@ -68,14 +68,13 @@ the title up again in the next cycle.
 | `fetcher.py` | HTTP requests to MyAnimeList, rate limiting (0.5s + 55 req/min), retries with backoff |
 | `mal_scraper.py` | HTML parsing → dict (BeautifulSoup). Three functions: `parse_season_page`, `parse_anime_page`, `parse_characters_page` |
 | `parser.py` | Normalizes data from the scraper for the loader. Year/season fallback from `aired` |
-| `loader.py` | dict → Cypher MERGE into Neo4j (all nodes and relationships). `upsert_anime`, `upsert_staff_only` |
+| `loader.py` | dict → Cypher MERGE into Neo4j (all nodes and relationships). `upsert_anime` |
 | `graph_state.py` | Queue state in Neo4j. Stubs, due selection, season markers, statistics |
 | `processing.py` | Glues fetcher → parser → loader for a single title. Shared code for scheduler and bootstrap |
 | `discover.py` | Registers new titles for the 3 current seasons in the graph (via `graph_state.upsert_anime_stub`) |
 | `scheduler_logic.py` | One cycle: `discover_recent` + `select_due_anime` → `process_one` for each |
 | `bootstrap.py` | Manual pass over all historical seasons (1917→), except the 3 current ones |
 | `app.py` | FastAPI + background scheduler loop, HTTP management endpoints |
-| `update_staff.py` | Manual script: backfills staff for anime with <=4 records |
 | `check_missing.py` | Manual script: cross-checks MAL ↔ Neo4j, adds missing titles |
 | `mal_seasons.py` | Season utilities: `current_season`, `shift_season`, `all_seasons` |
 | `config.py` | Loads `config.yaml` + env variables into a `Config` object |

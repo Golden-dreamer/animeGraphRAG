@@ -192,20 +192,6 @@ change — edit `config.yaml`.
 
 ## Utility Scripts
 
-### Backfilling Staff
-
-If the database was populated before v5, staff for most anime is incomplete:
-
-```bash
-docker compose run --rm parsers python update_staff.py
-docker compose run --rm parsers python update_staff.py --limit 100
-docker compose run --rm parsers python update_staff.py --threshold 4
-```
-
-Iterates over all anime with staff <= threshold (default 4), fetches the
-`/characters` page with the correct URL, updates relationships via
-`upsert_staff_only`.
-
 ### Backfilling Missed Titles
 
 ```bash

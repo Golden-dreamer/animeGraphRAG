@@ -98,9 +98,6 @@ curl -X PUT http://localhost:8567/schedule \
 ## Утилитные скрипты
 
 ```bash
-# Дополнить staff для аниме с <=4 записями
-docker compose run --rm parsers python update_staff.py
-
 # Сверить сезонные страницы с БД и добавить недостающие
 docker compose run --rm parsers python check_missing.py          # актуальные сезоны
 docker compose run --rm parsers python check_missing.py --all    # все сезоны (1917→)
