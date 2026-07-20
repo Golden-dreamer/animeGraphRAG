@@ -36,22 +36,10 @@ MAX_CYPHER_ATTEMPTS = 3
 
 # --- Промпты (defaults, могут быть переопределены через session config) ---
 
-GRAPH_SCHEMA = """\
-Узлы:
-  :Anime        — mal_id, title, title_original, title_english, title_synonyms, title_japanese,
-                  poster_url, mal_url, type, episodes, mal_status, aired, premiered, broadcast,
-                  source, duration, rating, score, scored_by, ranked, popularity, members,
-                  favorites, synopsis, background, year, season
-  :Genre        — name
-  :Studio       — name
-  :Producer     — name
-  :Character    — mal_id, name, url
-  :Person       — mal_id, name, url
-  :ExternalLink — url, name
-  :StreamingPlatform — name
-  :Manga        — mal_id, title
-
-Связи:
+# Семантика графа — то, что Neo4j introspection не отдаёт:
+# направления связей, конвенции, особенности значений.
+_SCHEMA_SEMANTICS = """\
+Направления связей (со свойствами):
   (Anime)-[:HAS_GENRE]->(Genre)
   (Anime)-[:HAS_THEME]->(Genre)
   (Anime)-[:HAS_DEMOGRAPHIC]->(Genre)
@@ -66,25 +54,64 @@ GRAPH_SCHEMA = """\
   (Anime)-[:AVAILABLE_AT]->(ExternalLink)
   (Anime)-[:HAS_RESOURCE]->(ExternalLink)
 
-Индексы: Anime.mal_id, Person.mal_id, Character.mal_id, Manga.mal_id,
-Genre.name, Studio.name, Producer.name — UNIQUE CONSTRAINT.
-Anime.mal_status — INDEX.
-
 Особенности:
   :Anime.title — алиас title_original, отображается в Neo4j Browser.
-  title IS NULL = тайтл зарегистрирован, но не обработан (stub).
+  mal_status IS NULL = тайтл зарегистрирован, но не обработан (stub).
   Person и Character уникальны по mal_id, не по имени (могут быть однофамильцы).
   STAFF.roles — список строк (director, producer, script, key animation, ...).
   Anime.year — число, Anime.season — lowercase (winter/spring/summer/fall).
 """
 
-DEFAULT_CYPHER_PROMPT = f"""\
+_schema_cache: str | None = None
+
+
+def _fetch_schema_from_neo4j() -> str:
+    """Запрашивает свойства узлов графа из Neo4j через introspection API.
+    Связи (направления и свойства) описаны в _SCHEMA_SEMANTICS — Neo4j
+    introspection не отдаёт направления связей."""
+    from collections import defaultdict
+    try:
+        with _get_driver().session() as session:
+            node_result = session.run("CALL db.schema.nodeTypeProperties()")
+            node_props: dict[str, list[str]] = defaultdict(list)
+            for r in node_result:
+                labels = r["nodeLabels"]
+                if not labels:
+                    continue
+                prop = r["propertyName"]
+                if prop:
+                    node_props[labels[0]].append(prop)
+            node_lines = [
+                f"  :{label:<18} — {', '.join(sorted(props))}"
+                for label, props in sorted(node_props.items())
+            ]
+            return "Узлы:\n" + "\n".join(node_lines)
+    except Exception as e:
+        log.warning("Не удалось получить схему из Neo4j: %s — использую fallback", e)
+        return ""
+
+
+def _build_graph_schema() -> str:
+    """Собирает полное описание схемы: introspection (структура) + семантика."""
+    global _schema_cache
+    if _schema_cache is not None:
+        return _schema_cache
+    structure = _fetch_schema_from_neo4j()
+    _schema_cache = (structure + "\n\n" + _SCHEMA_SEMANTICS) if structure else _SCHEMA_SEMANTICS.strip()
+    return _schema_cache
+
+
+def get_graph_schema() -> str:
+    """Публичный доступ к схеме графа (для промптов LLM)."""
+    return _build_graph_schema()
+
+DEFAULT_CYPHER_PROMPT = """\
 Ты — эксперт по Cypher-запросам к Neo4j. Тебе задаёт вопрос пользователь на русском.
 Твоя задача — составить Cypher-запрос к графу MyAnimeList и вернуть ТОЛЬКО запрос,
 без объяснений, без markdown-блоков, без лишнего текста.
 
 Схема графа:
-{GRAPH_SCHEMA}
+{schema}
 
 Правила:
 1. Возвращай ТОЛЬКО валидный Cypher. Никаких ```cypher блоков, никаких комментариев.
@@ -99,11 +126,11 @@ DEFAULT_CYPHER_PROMPT = f"""\
    НЕ ищи по русским названиям — переводи в английский эквивалент.
 4. Для поиска по названию: toLower(a.title) CONTAINS toLower('...') OR \
    toLower(a.title_english) CONTAINS toLower('...').
-5. "Режиссёр" = ANY(r IN rel.roles WHERE toLower(r) = 'director').
+5. "Режиссёр" = ANY(r IN rel.roles WHERE toLower(r) = 'director').\
    'Director' и 'ADR Director' — разные. Используй exact match toLower(r) = 'director'.
 6. "Сэйю"/"актёр озвучки" = Person через VOICE_ACTED к Character.
 7. LIMIT — ТОЛЬКО когда пользователь явно просит конкретное число ("топ-5", \
-"лучшие 3", "покажи 10"). Во всех остальных случаях НЕ добавляй LIMIT — \
+"лучшие 3", "покажи 10"). Во всех остальных случаях НЕ добавляйте LIMIT — \
 бэкенд сам ограничит объём данных. Произвольный LIMIT обрезает результаты \
 и приводит к неполным ответам.
 8. Сортируй по score DESC или year, если релевантно.
@@ -112,7 +139,7 @@ DEFAULT_CYPHER_PROMPT = f"""\
 10. Если запрос не имеет смысла в этой схеме — верни "INVALID".
 11. Если вопрос неоднозначен или не хватает данных для точного запроса \
    (например, неясно о каком именно тайтле речь, или пользователь не уточнил \
-   что именно хочет узнать) — верни "CLARIFY: <уточняющий вопрос на русском>".
+   что именно хочет узнать) — верни "CLARIFY: <уточняющий вопрос на русском>".\
    Пример: вопрос "сколько серий" без указания тайтла → \
    "CLARIFY: О каком аниме идёт речь?"
 12. Ответы на русском потом сформулирует другая часть системы — ты только Cypher.
@@ -141,7 +168,10 @@ def _cfg() -> session_config.SessionConfig:
 
 
 def _cypher_prompt() -> str:
-    return _cfg().cypher_prompt or DEFAULT_CYPHER_PROMPT
+    prompt = _cfg().cypher_prompt or DEFAULT_CYPHER_PROMPT
+    if "{schema}" in prompt:
+        prompt = prompt.replace("{schema}", get_graph_schema())
+    return prompt
 
 
 def _answer_prompt() -> str:
