@@ -159,9 +159,6 @@ def process_one(mal_id: int, cfg: Config, is_paused: Callable[[], bool] | None =
     if scores:
         loader.upsert_score_stats(mal_id, scores)
 
-    if all_usernames:
-        loader.cleanup_stale_ratings(mal_id, all_usernames)
-
     state.record_anime_check(mal_id, members_changed)
 
     log.info("mal_id=%s: собрано %d пользователей с %d страниц (changed=%s)",

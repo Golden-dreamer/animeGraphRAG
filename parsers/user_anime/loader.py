@@ -116,17 +116,3 @@ def upsert_score_stats(mal_id: int, scores: dict):
         """, mal_id=mal_id, scores_json=json.dumps(scores))
 
 
-def cleanup_stale_ratings(mal_id: int, fresh_usernames: set[str]):
-    """Удаляет RATED edge'и для аниме, которых нет в свежем скане."""
-    if not fresh_usernames:
-        return
-    with get_driver().session() as session:
-        result = session.run("""
-            MATCH (u:User)-[r:RATED]->(a:Anime {mal_id: $mal_id})
-            WHERE NOT u.username IN $fresh_usernames
-            DELETE r
-            RETURN count(r) AS deleted
-        """, mal_id=mal_id, fresh_usernames=list(fresh_usernames))
-        deleted = result.single()["deleted"]
-        if deleted:
-            log.info("mal_id=%s: удалено %d устаревших оценок", mal_id, deleted)
