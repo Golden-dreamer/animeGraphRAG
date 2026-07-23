@@ -64,11 +64,11 @@ Scheduler запускается автоматически. По умолчан
 scheduler):
 
 ```bash
-docker compose run --rm parsers python bootstrap.py
+docker compose run --rm airing-parser python bootstrap.py
 ```
 
 Прогресс сохраняется в Neo4j (`title IS NULL` у необработанных тайтлов)
-и в файле `parsers/bootstrap_progress.txt`. При прерывании — просто
+и в файле `parsers/anime/bootstrap_progress.txt`. При прерывании — просто
 запустите заново, продолжит с места остановки. Лимиты — ~27 тайтлов/мин
 (два запроса на тайтл: основная страница + characters/staff).
 
@@ -99,8 +99,8 @@ curl -X PUT http://localhost:8567/schedule \
 
 ```bash
 # Сверить сезонные страницы с БД и добавить недостающие
-docker compose run --rm parsers python check_missing.py          # актуальные сезоны
-docker compose run --rm parsers python check_missing.py --all    # все сезоны (1917→)
+docker compose run --rm airing-parser python check_missing.py          # актуальные сезоны
+docker compose run --rm airing-parser python check_missing.py --all    # все сезоны (1917→)
 ```
 
 ## Архитектура
@@ -142,7 +142,7 @@ parsers/                                      backend/
 
 - **Neo4j 5** — графовая БД
 - **FastAPI** — API парсера и GraphRAG бэкенд
-- **Docker Compose** — оркестрация (3 контейнера: neo4j, parsers, graphrag)
+- **Docker Compose** — оркестрация (neo4j, airing-parser, user-anime, user-user, coordinator, graphrag)
 - **BeautifulSoup** — HTML-скрапинг MyAnimeList
 - **OpenAI-compatible LLM** — text-to-Cypher пайплайн (по умолчанию `glm-5.2`)
 - **SQLite** — хранение чатов и логов GraphRAG

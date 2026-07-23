@@ -65,11 +65,11 @@ Load all anime from 1917 onward (except the three current seasons — the
 scheduler handles those):
 
 ```bash
-docker compose run --rm parsers python bootstrap.py
+docker compose run --rm airing-parser python bootstrap.py
 ```
 
 Progress is persisted in Neo4j (`title IS NULL` for unprocessed entries)
-and in the file `parsers/bootstrap_progress.txt`. If interrupted, just run
+and in the file `parsers/anime/bootstrap_progress.txt`. If interrupted, just run
 it again — it resumes from where it stopped. Throughput is ~27 titles/min
 (two requests per title: main page + characters/staff).
 
@@ -100,8 +100,8 @@ Full list of endpoints — [`docs/configuration.md`](docs/configuration.md).
 
 ```bash
 # Reconcile seasonal pages against the DB and add missing ones
-docker compose run --rm parsers python check_missing.py          # current seasons
-docker compose run --rm parsers python check_missing.py --all    # all seasons (1917→)
+docker compose run --rm airing-parser python check_missing.py          # current seasons
+docker compose run --rm airing-parser python check_missing.py --all    # all seasons (1917→)
 ```
 
 ## Architecture
@@ -143,7 +143,7 @@ More in [`docs/en/architecture.md`](docs/en/architecture.md).
 
 - **Neo4j 5** — graph database
 - **FastAPI** — parser API and GraphRAG backend
-- **Docker Compose** — orchestration (3 containers: neo4j, parsers, graphrag)
+- **Docker Compose** — orchestration (neo4j, airing-parser, user-anime, user-user, coordinator, graphrag)
 - **BeautifulSoup** — MyAnimeList HTML scraping
 - **OpenAI-compatible LLM** — text-to-Cypher pipeline (default: `glm-5.2`)
 - **SQLite** — stores GraphRAG chats and logs
