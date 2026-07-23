@@ -3,6 +3,53 @@
 Формат: дата — что изменилось и почему. Ведётся вручную, по мере значимых
 архитектурных решений (не каждый мелкий коммит).
 
+## 2026-07-23 (v22) — переработка координатора, pause, base_parser, три парсера
+
+**Три парсера вместо двух:** user-parser разделён на `user-anime`
+(anime-centric, порт 8568) и `user-user` (user-centric, порт 8569).
+Каждый — отдельный контейнер, отдельная директория (`parsers/user_anime/`,
+`parsers/user_user/`).
+
+**Базовый парсер (`parsers/base_parser.py`):** все парсеры наследуют
+`BaseParser` (FastAPI app, /trigger-cycle, /pause, /resume, /cycle-running,
+/status, /health). Pause работает через `is_paused` callback — проверяется
+между элементами и между страницами stats. `_accepts_empty_items` убран —
+все парсеры одинаковы. `trigger_cycle` с пустым списком → "no work", не
+запускает цикл.
+
+**Базовые классы (`parsers/`):**
+- `base_fetcher.py` — MalFetcher: HTTP-клиент с рейт-лимитером, ретраями,
+  kill switch (PauseRequested)
+- `base_parser.py` — BaseParser: базовый FastAPI-класс для всех парсеров
+- `base_schema.py` — ANIME_FIELDS, DUE_STATUSES, AnimeStatus (из schema.py)
+- `base_scraper.py` — clean, clean_int (из mal_scraper.py)
+
+**Координатор — полная переработка:**
+- `_select_*` функции перенесены из state.py парсеров в координатор
+- Координатор сам запрашивает Neo4j, формирует списки, передаёт парсерам
+- `_pause_all_others`: останавливает все парсеры кроме указанного, ждёт
+  остановки
+- `_wait_cycle_done`: priority_check=_is_anime_time — прерывает слайс
+  когда время airing
+- Батчи по BATCH_SIZE (5): шлёт батч → ждёт → следующий → пока слайс
+  не истечёт
+- `USER_SLICE_SEC`: сколько работает парсер до переключения (1800 сек)
+- `_smart_wait`: координатор спрашивает БД когда ближайший due, спит
+  до него (без cap), каждые 60 сек проверяет airing
+- Эндпоинты: PUT /auto/slice, PUT /auto/batch-size, PUT /anime-time,
+  PUT /auto/idle-wait, GET /auto/status
+
+**Airing-parser стал единообразным:** `scheduler_logic.run_cycle` принимает
+mal_ids от координатора, не вызывает `select_due_anime` сам. app.py: убраны
+`_accepts_empty_items` и `_extract_items` override. Структурно идентичен
+user-парсерам. `config.yaml` удалён — все настройки через env.
+
+**docker-compose.yml:** `parsers` → `airing-parser`, добавлены `user-anime`,
+`user-user`, `coordinator`. `COORDINATOR_BATCH_SIZE` + `TZ=Europe/Moscow`
+добавлены всем контейнерам. `PYTHONPATH=/shared` для доступа к base-модулям.
+
+**Cypher:** `NULLS FIRST` убран из всех запросов (Neo4j 5 не поддерживает).
+
 ## 2026-07-14 (v14) — tests + refactoring
 
 **Тесты:** 98 тестов покрывают основной функционал. Инфраструктура:

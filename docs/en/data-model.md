@@ -6,7 +6,7 @@ Neo4j is the only database. It stores the anime graph and the parsing queue stat
 
 | Label | Properties | Source |
 |---|---|---|
-| `:Anime` | `mal_id`, `title`, `title_original`, `title_english`, `title_synonyms`, `title_japanese`, `poster_url`, `mal_url`, `type`, `episodes`, `mal_status`, `aired`, `premiered`, `broadcast`, `source`, `duration`, `rating`, `score`, `scored_by`, `ranked`, `popularity`, `members`, `favorites`, `synopsis`, `background`, `year`, `season` | Main anime page |
+| `:Anime` | `mal_id`, `title`, `title_original`, `title_english`, `title_synonyms`, `title_japanese`, `poster_url`, `mal_url`, `type`, `episodes`, `mal_status`, `aired`, `premiered`, `broadcast`, `source`, `duration`, `rating`, `score`, `scored_by`, `ranked`, `popularity`, `members`, `favorites`, `synopsis`, `background`, `year`, `season`, `stats_watching`, `stats_completed`, `stats_on_hold`, `stats_dropped`, `stats_plan_to_watch`, `stats_total`, `summary_stats_at`, `score_stats` (JSON string), `score_stats_at` | Main anime page + stats page (user-anime) |
 | `:Genre` | `name` | Genres, Themes, Demographic |
 | `:Studio` | `name` | Information → Studios |
 | `:Producer` | `name` | Information → Producers, Licensors |
@@ -15,13 +15,17 @@ Neo4j is the only database. It stores the anime graph and the parsing queue stat
 | `:ExternalLink` | `url`, `name` | Available At, Resources (including the MAL link) |
 | `:StreamingPlatform` | `name` | Streaming Platforms |
 | `:Manga` | `mal_id`, `title` | Related Entries (type manga) |
+| `:User` | `username` (unique), `profile_url`, `status` ("active"|"archived"), `discovered_via_anime`, `last_seen`, `created_at`, `archived_at` | user-anime / user-user |
 
 `:Anime.title` is an alias for `title_original`, needed for correct
 display in Neo4j Browser. `title IS NULL` means the title is registered
 as a stub but not yet processed (data from MAL has not been fetched yet).
 
 Bootstrap progress is stored in the file `bootstrap_progress.txt` (on the
-host via the `./parsers` volume), not in Neo4j.
+host via the `./parsers/anime` volume), not in Neo4j.
+
+`:User` ≠ `:Person`. `:Person` — staff/VA (anime creators). `:User` —
+a viewer who rates anime (source: user-anime / user-user).
 
 ## Relationships
 
@@ -40,6 +44,7 @@ host via the `./parsers` volume), not in Neo4j.
 | `AVAILABLE_AT` | Anime → ExternalLink | | Official site, Twitter, ... |
 | `HAS_RESOURCE` | Anime → ExternalLink | | AniDB, ANN, Wikipedia, ... (including the MAL link) |
 | `STREAMING_ON` | Anime → StreamingPlatform | `url`, `available` | Streaming platform |
+| `RATED` | User → Anime | `score`, `status`, `episodes_watched`, `tags`, `updated_at` | User rating |
 
 All writes go through `MERGE` — re-running `loader.upsert_anime()` with the
 same `mal_id` does not create duplicates but updates node properties.
@@ -62,6 +67,7 @@ Constraints (uniqueness + index) have been created for all keys used in
 | `:Genre` | `name` | UNIQUE CONSTRAINT |
 | `:Studio` | `name` | UNIQUE CONSTRAINT |
 | `:Producer` | `name` | UNIQUE CONSTRAINT |
+| `:User` | `username` | UNIQUE CONSTRAINT |
 | `:ExternalLink` | `url` | INDEX (non-unique) |
 
 Additionally: `INDEX FOR (a:Anime) ON (a.mal_status)` — speeds up

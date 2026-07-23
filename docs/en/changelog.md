@@ -3,6 +3,55 @@
 Format: date — what changed and why. Maintained manually, as significant
 architectural decisions happen (not every minor commit).
 
+## 2026-07-23 (v22) — coordinator overhaul, pause, base_parser, three parsers
+
+**Three parsers instead of two:** user-parser split into `user-anime`
+(anime-centric, port 8568) and `user-user` (user-centric, port 8569).
+Each is a separate container, separate directory (`parsers/user_anime/`,
+`parsers/user_user/`).
+
+**Base parser (`parsers/base_parser.py`):** all parsers inherit
+`BaseParser` (FastAPI app, /trigger-cycle, /pause, /resume, /cycle-running,
+/status, /health). Pause works via `is_paused` callback — checked between
+items and between stats pages. `_accepts_empty_items` removed — all parsers
+are the same. `trigger_cycle` with an empty list → "no work", does not
+start the cycle.
+
+**Base classes (`parsers/`):**
+- `base_fetcher.py` — MalFetcher: HTTP client with rate limiter, retries,
+  kill switch (PauseRequested)
+- `base_parser.py` — BaseParser: base FastAPI class for all parsers
+- `base_schema.py` — ANIME_FIELDS, DUE_STATUSES, AnimeStatus (from schema.py)
+- `base_scraper.py` — clean, clean_int (from mal_scraper.py)
+
+**Coordinator — full overhaul:**
+- `_select_*` functions moved from parsers' state.py to the coordinator
+- The coordinator queries Neo4j itself, builds lists, passes them to parsers
+- `_pause_all_others`: stops all parsers except the specified one, waits
+  for them to stop
+- `_wait_cycle_done`: priority_check=_is_anime_time — interrupts the slice
+  when airing time arrives
+- Batches of BATCH_SIZE (5): send batch → wait → next → until the slice
+  expires
+- `USER_SLICE_SEC`: how long a parser runs before switching (1800 sec)
+- `_smart_wait`: the coordinator asks the DB when the next item is due,
+  sleeps until then (no cap), checks airing every 60 seconds
+- Endpoints: PUT /auto/slice, PUT /auto/batch-size, PUT /anime-time,
+  PUT /auto/idle-wait, GET /auto/status
+
+**Airing-parser made uniform:** `scheduler_logic.run_cycle` accepts
+mal_ids from the coordinator, does not call `select_due_anime` itself.
+app.py: removed `_accepts_empty_items` and `_extract_items` override.
+Structurally identical to user parsers. `config.yaml` removed — all
+settings via env.
+
+**docker-compose.yml:** `parsers` → `airing-parser`, added `user-anime`,
+`user-user`, `coordinator`. `COORDINATOR_BATCH_SIZE` + `TZ=Europe/Moscow`
+added to all containers. `PYTHONPATH=/shared` for base module access.
+
+**Cypher:** `NULLS FIRST` removed from all queries (Neo4j 5 does not
+support it).
+
 ## 2026-07-14 (v14) — tests + refactoring
 
 **Tests:** 98 tests cover the core functionality. Infrastructure:

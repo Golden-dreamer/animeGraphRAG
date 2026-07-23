@@ -1,16 +1,20 @@
 # Configuration
 
-Settings are split across three levels: `.env` (credentials, ports, API
-limits), `parsers/config.yaml` (scheduler parameters), `docker-compose.yml`
-(Neo4j memory). All `.env` and `config.yaml` parameters can be changed
-without rebuilding the image — just `docker compose restart`.
+Settings are split across two levels: `.env` (credentials, ports, API
+limits) and `docker-compose.yml` (Neo4j memory, service ports). All `.env`
+parameters can be changed without rebuilding the image — just
+`docker compose restart`. `config.yaml` has been removed — all parser
+settings are via env variables.
 
 ## `.env` (project root)
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `NEO4J_PASSWORD` | — | Neo4j password (login is fixed — `neo4j`) |
-| `PARSERS_PORT` | `8567` | FastAPI port on the host |
+| `PARSERS_PORT` | `8567` | airing-parser port on the host |
+| `USER_ANIME_PORT` | `8568` | user-anime port on the host |
+| `USER_USER_PORT` | `8569` | user-user port on the host |
+| `COORDINATOR_PORT` | `8570` | coordinator port on the host |
 | `API_MIN_INTERVAL_SEC` | `0.5` | Minimum interval between requests (2/sec, margin under 3) |
 | `API_RATE_WINDOW_SEC` | `60` | Sliding limit window (seconds) |
 | `API_RATE_WINDOW_MAX` | `55` | Max requests per window (margin under 60) |
@@ -19,20 +23,13 @@ without rebuilding the image — just `docker compose restart`.
 | `API_RETRY_MAX_DELAY` | `30` | Backoff ceiling (seconds) |
 | `API_HTTP_TIMEOUT` | `20` | HTTP request timeout (seconds) |
 | `MAL_BASE_URL` | `https://myanimelist.net` | Base site URL |
+| `TZ` | `Europe/Moscow` | Timezone for all containers |
 | `OLLAMA_API_KEY` | — | API key for the GraphRAG LLM (OpenAI-compatible) |
 | `GRAPHRAG_LLM_BASE_URL` | `https://ollama.com/v1` | Base URL of the LLM API for GraphRAG |
 | `GRAPHRAG_LLM_MODEL` | `glm-5.2` | LLM model for Cypher generation and answers |
 | `GRAPHRAG_LLM_MAX_TOKENS` | `8192` | Token limit for the LLM response |
 
 `.env` is in `.gitignore` — credentials never go into git.
-
-## `parsers/config.yaml`
-
-| Parameter | Env variable | Default | Meaning |
-|---|---|---|---|
-| `batch_size` | `BATCH_SIZE` | `50` | DB query batch size in bootstrap |
-| `cycle_interval_sec` | `CYCLE_INTERVAL_SEC` | `86400` | Pause between scheduler cycles (once a day) |
-| `request_delay_sec` | `REQUEST_DELAY_SEC` | `1.2` | Passed to the fetcher but unused (rate limiting is handled by internal mechanisms) |
 
 ## `docker-compose.yml` — Neo4j Memory
 
@@ -44,49 +41,105 @@ without rebuilding the image — just `docker compose restart`.
 
 Changes apply on `docker compose restart neo4j`. No image rebuild needed.
 
-## FastAPI Endpoints
+## Airing-parser (port 8567)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BATCH_SIZE` | `50` | DB query batch size |
+| `CYCLE_INTERVAL_SEC` | `86400` | Pause between cycles (not used by coordinator) |
+| `COORDINATOR_URL` | `http://coordinator:8000` | Coordinator URL (inside Docker) |
+| `PYTHONPATH` | `/shared` | Path to base modules (mounted `/shared`) |
+
+## User-anime (port 8568)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `USER_STATS_BATCH_SIZE` | `50` | Batch size for stats pages |
+| `COORDINATOR_URL` | `http://coordinator:8000` | Coordinator URL |
+| `PYTHONPATH` | `/shared` | Path to base modules |
+
+## User-user (port 8569)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `USER_REFRESH_BATCH_SIZE` | `50` | Batch size for user refresh |
+| `COORDINATOR_URL` | `http://coordinator:8000` | Coordinator URL |
+| `PYTHONPATH` | `/shared` | Path to base modules |
+
+## Coordinator (port 8570)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ANIME_PARSER_URL` | `http://airing-parser:8000` | airing-parser URL (inside Docker) |
+| `USER_ANIME_URL` | `http://user-anime:8000` | user-anime URL (inside Docker) |
+| `USER_USER_URL` | `http://user-user:8000` | user-user URL (inside Docker) |
+| `ANIME_PARSER_TIME` | `03:00` | airing-parser start time (HH:MM) |
+| `COORDINATOR_USER_SLICE_SEC` | `1800` | slice duration (sec, 30 min) |
+| `COORDINATOR_IDLE_WAIT_SEC` | `300` | idle wait (sec) — fallback if DB gives no answer |
+| `COORDINATOR_BATCH_SIZE` | `5` | batch size (how many items to send) |
+
+## Airing-parser Endpoints (port 8567)
 
 | Method | Path | Meaning |
 |---|---|---|
 | GET | `/status` | statistics (total, parsed, stubs, airing, seasons) |
 | GET | `/stubs` | incomplete nodes — Anime with `title IS NULL` |
 | POST | `/refresh/{mal_id}` | force-update a single title (direct `process_one` call) |
-| POST | `/trigger-cycle` | run a scheduler cycle now (discover + due queue) |
-| PUT | `/schedule` | change the automatic cycle interval (`cycle_interval_sec`) |
+| POST | `/trigger-cycle` | run a cycle (mal_ids in body from coordinator) |
 | GET | `/config` | current limits and intervals |
 | GET | `/health` | health check |
-
-### POST /trigger-cycle
-
-Triggers a scheduler cycle immediately. Runs discover (current/next/
-previous season) and processes all due titles. If a cycle is already
-running — returns 409.
-
-```bash
-curl -X POST http://localhost:8567/trigger-cycle
-```
-
-### PUT /schedule
-
-Changes `cycle_interval_sec`. Minimum 60 seconds. The change takes effect
-immediately and persists until container restart (for a permanent change —
-edit `config.yaml`).
-
-```bash
-curl -X PUT http://localhost:8567/schedule \
-  -H "Content-Type: application/json" \
-  -d '{"cycle_interval_sec": 3600}'
-```
+| POST | `/pause` | stop after current item |
+| POST | `/resume` | clear pause |
+| GET | `/cycle-running` | cycle status |
 
 ### POST /refresh/{mal_id}
 
 Updates a title immediately (direct `process_one` call), bypassing the queue.
-Useful when: an archived title's rating changed; a title is stuck as a stub;
-data is clearly stale.
 
 ```bash
 curl -X POST http://localhost:8567/refresh/5249
 ```
+
+## User-anime Endpoints (port 8568)
+
+| Method | Path | Meaning |
+|---|---|---|
+| GET | `/status` | statistics (total_users, active_users, archived_users, total_ratings, anime_stats_checked, anime_stats_pending) |
+| POST | `/trigger-cycle` | manually trigger a cycle (accepts mal_ids in body) |
+| POST | `/scan-anime/{mal_id}` | scan a specific anime |
+| POST | `/pause` | stop after current item |
+| POST | `/resume` | clear pause |
+| GET | `/cycle-running` | cycle status |
+| GET | `/health` | health check |
+
+## User-user Endpoints (port 8569)
+
+| Method | Path | Meaning |
+|---|---|---|
+| GET | `/status` | statistics (total_users, active_users, archived_users, total_ratings) |
+| POST | `/trigger-cycle` | manually trigger a cycle (accepts usernames in body) |
+| POST | `/refresh-user/{username}` | refresh a specific user |
+| POST | `/pause` | stop after current item |
+| POST | `/resume` | clear pause |
+| GET | `/cycle-running` | cycle status |
+| GET | `/health` | health check |
+
+## Coordinator Endpoints (port 8570)
+
+| Method | Path | Meaning |
+|---|---|---|
+| GET | `/` | status of all parsers + auto_mode |
+| POST | `/start/anime` | start airing-parser, stop others |
+| POST | `/start/user-anime` | start user-anime, stop others |
+| POST | `/start/user-user` | start user-user, stop others |
+| POST | `/pause` | stop all |
+| POST | `/auto` | auto-mode (slice alternation) |
+| POST | `/auto/stop` | stop auto-mode |
+| GET | `/auto/status` | auto-mode status |
+| PUT | `/auto/slice` | change slice duration (sec) |
+| PUT | `/auto/batch-size` | change batch size |
+| PUT | `/anime-time` | change airing-parser start time (HH:MM) |
+| PUT | `/auto/idle-wait` | change idle wait (sec) |
 
 ## GraphRAG Endpoints (port 8666)
 
