@@ -4,9 +4,9 @@
 и добавляет недостающие тайтлы как stub'ы (title IS NULL).
 
 Запуск:
-    docker compose run --rm parsers python check_missing.py
-    docker compose run --rm parsers python check_missing.py --season 2026 summer
-    docker compose run --rm parsers python check_missing.py --all  # все сезоны
+    docker compose run --rm airing-parser python check_missing.py
+    docker compose run --rm airing-parser python check_missing.py --season 2026 summer
+    docker compose run --rm airing-parser python check_missing.py --all  # все сезоны
 """
 import argparse
 import logging

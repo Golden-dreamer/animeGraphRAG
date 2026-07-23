@@ -10,7 +10,7 @@ import os
 
 from neo4j import GraphDatabase
 
-from schema import ANIME_FIELDS
+from base_schema import ANIME_FIELDS
 
 _driver = None
 

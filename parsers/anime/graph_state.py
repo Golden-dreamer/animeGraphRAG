@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from loader import get_driver
-from schema import DUE_STATUSES, AnimeStatus
+from base_schema import DUE_STATUSES, AnimeStatus
 
 
 def upsert_anime_stub(mal_id: int, year: int, season: str) -> int:

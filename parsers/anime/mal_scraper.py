@@ -16,32 +16,12 @@ from html import unescape
 
 from bs4 import BeautifulSoup
 
+from base_scraper import clean as _clean, clean_int as _clean_int
+
 
 # ---------------------------------------------------------------------------
-# Утилиты
+# Утилиты (дополнительные, только для mal_scraper)
 # ---------------------------------------------------------------------------
-
-def _clean(text: str | None) -> str | None:
-    """Очищает текст: убирает лишние пробелы, переносы, HTML-entities."""
-    if text is None:
-        return None
-    text = unescape(text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text if text else None
-
-
-def _clean_int(text: str | None) -> int | None:
-    """Парсит int из текста, убирая запятые и прочий мусор."""
-    if text is None:
-        return None
-    text = re.sub(r'[,#\s]', '', text)
-    if not text:
-        return None
-    try:
-        return int(text)
-    except ValueError:
-        return None
-
 
 def _clean_float(text: str | None) -> float | None:
     if text is None:
