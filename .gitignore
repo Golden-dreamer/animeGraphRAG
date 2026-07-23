@@ -1,10 +1,14 @@
+.hermes
+.gitignore
+.venv
 .env
 .hermes.md
 .DS_Store
-parsers/cache/
-parsers/data/
-parsers/bootstrap_progress.txt
+parsers/anime/cache/
+parsers/anime/data/
+parsers/anime/bootstrap_progress.txt
 backend/__pycache__/
 backend/data/
 __pycache__/
 *.pyc
+TODO.md
