@@ -7,6 +7,9 @@
 
 Pause проверяется между элементами — доработать текущий и остановиться.
 is_paused callback передаётся из BaseParser (self.is_paused).
+
+Resume cache убран: stats-страницы динамические, при pause аниме
+обрабатывается заново в следующем цикле.
 """
 from __future__ import annotations
 
@@ -24,27 +27,12 @@ log = logging.getLogger("user_anime_scheduler")
 
 _PROGRESS_EVERY = 10
 
-# In-memory resume cache: ОДИН mal_id -\u003e page_num.
-# При pause запоминаем где остановились. При resume — продолжаем с этой страницы.
-# Если координатор прислал другой mal_id — assert (значит логика сломалась).
-_resume_cache: dict[int, int] = {}
-
 
 def run_cycle(mal_ids: list[int], cfg: Config, is_paused: Callable[[], bool] | None = None) -> list[dict]:
     """Обработать список mal_ids. Вернуть результаты."""
     if not mal_ids:
         log.warning("user-anime: нет аниме для проверки")
         return []
-
-    # Проверка resume cache: если есть закэшированный mal_id,
-    # он ДОЛЖЕН совпадать с первым в батче от координатора.
-    if _resume_cache:
-        cached_id = next(iter(_resume_cache))
-        assert cached_id == mal_ids[0], (
-            f"resume cache mismatch: cached={cached_id}, coordinator sent={mal_ids[0]}. "
-            f"Координатор должен выдать тот же недособранный mal_id."
-        )
-        log.info("user-anime: resume mal_id=%s со страницы %d", cached_id, _resume_cache[cached_id])
 
     total = len(mal_ids)
     stats = state.get_user_stats()
@@ -58,8 +46,7 @@ def run_cycle(mal_ids: list[int], cfg: Config, is_paused: Callable[[], bool] | N
             log.info("user-anime: пауза на %d/%d", i - 1, total)
             break
         try:
-            resume_page = _resume_cache.pop(mal_id, 1)
-            users_found = process_one(mal_id, cfg, is_paused=is_paused, resume_page=resume_page)
+            users_found = process_one(mal_id, cfg, is_paused=is_paused)
             results.append({"mal_id": mal_id, "users_found": users_found})
             processed += 1
         except PauseRequested:
@@ -76,23 +63,12 @@ def run_cycle(mal_ids: list[int], cfg: Config, is_paused: Callable[[], bool] | N
                      stats.get("total_users", 0),
                      stats.get("total_ratings", 0))
 
-    # Если cache не пустой после цикла — значит был pause и mal_id не доработал
-    # (или доработал но cache не очистился — это нормально, process_one чистит сам)
-    if _resume_cache:
-        cached_id = next(iter(_resume_cache))
-        log.info("user-anime: resume cache сохранён: mal_id=%s -\u003e page %d",
-                 cached_id, _resume_cache[cached_id])
-
     log.info("user-anime завершён: обработано %d/%d", processed, total)
     return results
 
 
-def process_one(mal_id: int, cfg: Config, is_paused: Callable[[], bool] | None = None,
-                resume_page: int = 1) -> int:
-    """Проверить Summary Stats → собрать пользователей из stats-страниц.
-
-    resume_page — продолжить с этой страницы (при resume после pause).
-    """
+def process_one(mal_id: int, cfg: Config, is_paused: Callable[[], bool] | None = None) -> int:
+    """Проверить Summary Stats → собрать пользователей из stats-страниц."""
     # Первая страница нужна всегда — из неё берём summary/scores
     html = fetcher.fetch_stats_page(mal_id, "_", 0, cfg)
     if html is None:
@@ -108,16 +84,8 @@ def process_one(mal_id: int, cfg: Config, is_paused: Callable[[], bool] | None =
     all_usernames: set[str] = set()
     was_paused = False
 
-    if resume_page > 1:
-        log.info("mal_id=%s: resume со страницы %d", mal_id, resume_page)
-
-    # Если resume со страницы N — первые N-1 страниц уже собраны в прошлый раз
-    page_num = resume_page
-    offset = (page_num - 1) * 75
-
-    # Если resume не со 1-й — сразу фетчим нужную страницу
-    if resume_page > 1:
-        html = fetcher.fetch_stats_page(mal_id, "_", offset, cfg)
+    page_num = 1
+    offset = 0
 
     try:
         while html is not None:
@@ -145,10 +113,7 @@ def process_one(mal_id: int, cfg: Config, is_paused: Callable[[], bool] | None =
         was_paused = True
 
     if was_paused:
-        # Сохраняем страницу для resume
-        _resume_cache.clear()
-        _resume_cache[mal_id] = page_num
-        log.info("mal_id=%s: собрано %d пользователей (paused на стр %d, resume cache сохранён)",
+        log.info("mal_id=%s: собрано %d пользователей (paused на стр %d)",
                  mal_id, total_users, page_num)
         return total_users
 

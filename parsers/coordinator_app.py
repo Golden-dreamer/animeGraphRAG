@@ -49,7 +49,7 @@ ANIME_PARSER_URL = os.environ.get("ANIME_PARSER_URL", "http://airing-parser:8000
 USER_ANIME_URL = os.environ.get("USER_ANIME_URL", "http://user-anime:8000")
 USER_USER_URL = os.environ.get("USER_USER_URL", "http://user-user:8000")
 ANIME_PARSER_TIME = os.environ.get("ANIME_PARSER_TIME", "03:00")  # HH:MM
-USER_SLICE_SEC = int(os.environ.get("COORDINATOR_USER_SLICE_SEC", "1800"))
+USER_SLICE_SEC = int(os.environ.get("COORDINATOR_USER_SLICE_SEC", "3600"))
 IDLE_WAIT_SEC = int(os.environ.get("COORDINATOR_IDLE_WAIT_SEC", "300"))
 BATCH_SIZE = int(os.environ.get("COORDINATOR_BATCH_SIZE", "5"))
 
