@@ -74,7 +74,7 @@ Changes apply on `docker compose restart neo4j`. No image rebuild needed.
 | `USER_ANIME_URL` | `http://user-anime:8000` | user-anime URL (inside Docker) |
 | `USER_USER_URL` | `http://user-user:8000` | user-user URL (inside Docker) |
 | `ANIME_PARSER_TIME` | `03:00` | airing-parser start time (HH:MM) |
-| `COORDINATOR_USER_SLICE_SEC` | `1800` | slice duration (sec, 30 min) |
+| `COORDINATOR_USER_SLICE_SEC` | `3600` | slice duration (sec, 1 hour) |
 | `COORDINATOR_IDLE_WAIT_SEC` | `300` | idle wait (sec) — fallback if DB gives no answer |
 | `COORDINATOR_BATCH_SIZE` | `5` | batch size (how many items to send) |
 

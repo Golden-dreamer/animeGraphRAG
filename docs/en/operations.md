@@ -7,7 +7,7 @@ docker compose up -d --build
 ```
 
 The coordinator manages the parsers. By default, auto-mode starts:
-alternating user-anime/user-user (30 min slices) and airing-parser
+alternating user-anime/user-user (1 hour slices) and airing-parser
 (by time, 03:00). Parsers are passive — they do not start their own
 background loops. MyAnimeList rate limits (0.5s between requests, 55
 req/min) are enforced inside `fetcher.py` automatically.

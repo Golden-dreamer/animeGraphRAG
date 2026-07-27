@@ -3,6 +3,23 @@
 Format: date — what changed and why. Maintained manually, as significant
 architectural decisions happen (not every minor commit).
 
+## 2026-07-27 (v23) — resume cache removed, slice 30 min → 1 hour
+
+**Problem:** `AssertionError: resume cache mismatch` in user-anime scheduler.
+In-memory `_resume_cache` stored mal_id and page number on pause. On resume,
+an assert checked that the coordinator sent the same mal_id first. But the
+coordinator did not know about resume cache — it built batches from Neo4j
+(`ORDER BY a.members DESC`), and the cached mal_id was not required to be
+first. Assert failed → cycle-done → coordinator launched a new batch → same
+assert → infinite loop (6 errors in 270 ms).
+
+**Solutions:**
+- Resume cache fully removed from `scheduler.py`. Stats pages are dynamic
+  (user composition changes), saving the page number is meaningless. On
+  pause, the anime is processed from scratch in the next cycle.
+- `COORDINATOR_USER_SLICE_SEC` default changed from 1800 (30 min) to 3600
+  (1 hour) — more time per slice, fewer switches.
+
 ## 2026-07-23 (v22) — coordinator overhaul, pause, base_parser, three parsers
 
 **Three parsers instead of two:** user-parser split into `user-anime`
@@ -33,7 +50,7 @@ start the cycle.
   when airing time arrives
 - Batches of BATCH_SIZE (5): send batch → wait → next → until the slice
   expires
-- `USER_SLICE_SEC`: how long a parser runs before switching (1800 sec)
+- `USER_SLICE_SEC`: how long a parser runs before switching (3600 sec)
 - `_smart_wait`: the coordinator asks the DB when the next item is due,
   sleeps until then (no cap), checks airing every 60 seconds
 - Endpoints: PUT /auto/slice, PUT /auto/batch-size, PUT /anime-time,

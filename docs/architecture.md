@@ -95,7 +95,7 @@ Neo4j — та же БД, что и для parsers
 ```
 
 Координатор чередует user-anime и user-user слайсами
-(`COORDINATOR_USER_SLICE_SEC`, по умолчанию 1800 сек = 30 мин). Внутри
+(`COORDINATOR_USER_SLICE_SEC`, по умолчанию 3600 сек = 1 час). Внутри
 слайса координатор шлёт батчи по `COORDINATOR_BATCH_SIZE` (по умолчанию 5)
 элементов: шлёт батч → ждёт завершения → следующий → пока слайс не истечёт.
 Airing-parser запускается по времени (`ANIME_PARSER_TIME`, по умолчанию 03:00)
@@ -114,7 +114,7 @@ Airing-parser запускается по времени (`ANIME_PARSER_TIME`, �
 
 **Авто-режим** (по умолчанию): чередование слайсов.
 Каждый слайс: user-anime работает `COORDINATOR_USER_SLICE_SEC` (по
-умолчанию 1800 = 30 мин), батчами по `COORDINATOR_BATCH_SIZE` (5).
+умолчанию 3600 = 1 час), батчами по `COORDINATOR_BATCH_SIZE` (5).
 Airing-parser запускается по времени `ANIME_PARSER_TIME` (03:00).
 `_pause_all_others` останавливает все парсеры кроме указанного, ждёт
 остановки. `_smart_wait` — если работы нет, координатор спрашивает БД

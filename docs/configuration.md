@@ -74,7 +74,7 @@
 | `USER_ANIME_URL` | `http://user-anime:8000` | URL user-anime (внутри Docker) |
 | `USER_USER_URL` | `http://user-user:8000` | URL user-user (внутри Docker) |
 | `ANIME_PARSER_TIME` | `03:00` | время запуска airing-parser (HH:MM) |
-| `COORDINATOR_USER_SLICE_SEC` | `1800` | длительность слайса (сек, 30 мин) |
+| `COORDINATOR_USER_SLICE_SEC` | `3600` | длительность слайса (сек, 1 час) |
 | `COORDINATOR_IDLE_WAIT_SEC` | `300` | idle wait (сек) — fallback если БД не отвечает |
 | `COORDINATOR_BATCH_SIZE` | `5` | размер батча (сколько элементов отправить) |
 

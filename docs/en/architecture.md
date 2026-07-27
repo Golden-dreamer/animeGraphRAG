@@ -96,7 +96,7 @@ Neo4j — same DB as for parsers
 ```
 
 The coordinator alternates user-anime and user-user in slices
-(`COORDINATOR_USER_SLICE_SEC`, default 1800 sec = 30 min). Within a slice,
+(`COORDINATOR_USER_SLICE_SEC`, default 3600 sec = 1 hour). Within a slice,
 the coordinator sends batches of `COORDINATOR_BATCH_SIZE` (default 5)
 items: send batch → wait for completion → next → until the slice expires.
 Airing-parser runs by time (`ANIME_PARSER_TIME`, default 03:00)
@@ -114,7 +114,7 @@ and passes them to parsers via the `/trigger-cycle` body.
 
 **Auto-mode** (default): slice alternation.
 Each slice: user-anime runs for `COORDINATOR_USER_SLICE_SEC` (default
-1800 = 30 min), in batches of `COORDINATOR_BATCH_SIZE` (5). Airing-parser
+3600 = 1 hour), in batches of `COORDINATOR_BATCH_SIZE` (5). Airing-parser
 runs by time `ANIME_PARSER_TIME` (03:00). `_pause_all_others` stops all
 parsers except the specified one, waits for them to stop. `_smart_wait`
 — if there is no work, the coordinator asks the DB when the next item is
