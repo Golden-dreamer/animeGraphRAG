@@ -2,10 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock ./
 
-COPY coordinator_app.py .
+RUN pip install --no-cache-dir uv && \
+    uv pip install --system --no-cache .
+
+COPY parsers/coordinator_app.py ./
 
 EXPOSE 8000
 

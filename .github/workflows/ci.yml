@@ -17,24 +17,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            parsers/anime/requirements.txt
-            parsers/user_anime/requirements.txt
-            parsers/user_user/requirements.txt
-            backend/requirements.txt
-            requirements-dev.txt
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          cat \
-            parsers/anime/requirements.txt \
-            parsers/user_anime/requirements.txt \
-            parsers/user_user/requirements.txt \
-            backend/requirements.txt \
-            requirements-dev.txt \
-            | sort -u | pip install -r /dev/stdin
+        run: uv sync --group dev
 
       - name: Run tests
-        run: pytest
+        run: uv run pytest

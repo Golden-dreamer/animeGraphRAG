@@ -19,7 +19,9 @@ services:
       retries: 20
 
   airing-parser:
-    build: ./parsers/anime
+    build:
+      context: .
+      dockerfile: parsers/anime/Dockerfile
     restart: unless-stopped
     depends_on:
       neo4j:
@@ -48,7 +50,9 @@ services:
       - ./parsers:/shared:ro
 
   graphrag:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     depends_on:
       neo4j:
@@ -69,7 +73,9 @@ services:
       - graphrag_data:/data
 
   user-anime:
-    build: ./parsers/user_anime
+    build:
+      context: .
+      dockerfile: parsers/user_anime/Dockerfile
     restart: unless-stopped
     depends_on:
       neo4j:
@@ -93,7 +99,9 @@ services:
       - ./parsers:/shared:ro
 
   user-user:
-    build: ./parsers/user_user
+    build:
+      context: .
+      dockerfile: parsers/user_user/Dockerfile
     restart: unless-stopped
     depends_on:
       neo4j:
@@ -117,7 +125,9 @@ services:
       - ./parsers:/shared:ro
 
   coordinator:
-    build: ./parsers
+    build:
+      context: .
+      dockerfile: parsers/Dockerfile
     restart: unless-stopped
     depends_on:
       neo4j:
