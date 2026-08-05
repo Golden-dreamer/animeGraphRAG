@@ -70,7 +70,7 @@ def process_one(username: str, cfg: Config) -> int:
     raw = fetcher.fetch_animelist(username, cfg)
 
     if raw is None:
-        log.info("user=%s: профиль не найден (404) — архивируем", username)
+        log.info("user=%s: профиль недоступен (400/403/404) — архивируем", username)
         loader.archive_user(username)
         return 0
 

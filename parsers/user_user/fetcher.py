@@ -20,7 +20,8 @@ _fetcher = MalFetcher()
 def fetch_animelist(username: str, cfg: Config) -> list | None:
     """Загружает JSON animelist пользователя.
 
-    Возвращает список dict'ов или None при 404 (профиль удалён).
+    Возвращает список dict'ов или None при 400/403/404 (профиль удалён,
+    забанен или приватный).
     Пагинация: offset=0,300,600... (MAL отдаёт по 300).
     """
     all_entries = []
@@ -30,7 +31,7 @@ def fetch_animelist(username: str, cfg: Config) -> list | None:
         try:
             text = _fetcher.http_get(url)
         except requests.exceptions.HTTPError as e:
-            if e.response is not None and e.response.status_code == 404:
+            if e.response is not None and e.response.status_code in (400, 403, 404):
                 return None
             raise
         data = json.loads(text)
@@ -44,12 +45,13 @@ def fetch_animelist(username: str, cfg: Config) -> list | None:
 
 
 def check_profile(username: str, cfg: Config) -> bool:
-    """Проверяет, существует ли профиль пользователя. True = существует."""
+    """Проверяет, существует ли профиль пользователя. True = существует.
+    400 (забанен), 403 (приватный), 404 (удалён) → False."""
     url = f"{cfg.base_url}/profile/{username}"
     try:
         _fetcher.http_get(url)
         return True
     except requests.exceptions.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
+        if e.response is not None and e.response.status_code in (400, 403, 404):
             return False
         raise
