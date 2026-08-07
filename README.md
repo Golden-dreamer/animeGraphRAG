@@ -8,8 +8,8 @@ into a Neo4j graph database, with a web interface for natural-language queries.
 A scheduler keeps the current, next, and previous seasons up to date.
 A bootstrap script walks the archive all the way back to 1917.
 
-212K+ nodes, 899K+ relationships — anime, studios, genres, characters, voice
-actors, directors.
+2M+ nodes, 41M+ relationships — anime, studios, genres, characters, voice
+actors, directors, and user ratings.
 
 ## What it looks like
 
@@ -17,9 +17,13 @@ actors, directors.
 
 ![GraphRAG UI](docs/img/graphrag-chat.png)
 
-**Neo4j Browser** — graph visualization:
+**Neo4j Browser** — database overview:
 
-![Neo4j Graph](docs/img/neo4j-graph.png)
+![Neo4j Database](docs/img/neo4j-graph.png)
+
+**Graph visualization** — Steins;Gate and its connections (genres, studio, characters, staff):
+
+![Graph Visualization](docs/img/neo4j-graph-viz.png)
 
 ## Example questions
 
